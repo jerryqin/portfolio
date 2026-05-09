@@ -1,0 +1,302 @@
+import React, { useState } from 'react';
+import {
+  Modal,
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  Alert,
+} from 'react-native';
+import DocumentPicker, { types } from 'react-native-document-picker';
+import RNFS from 'react-native-fs';
+import { useQuery } from '@realm/react';
+import Realm from 'realm';
+import { Colors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
+import { parseCSV, ParsedRow } from '../../utils/csvImport';
+import { usePortfolioStore } from '../../store/portfolioStore';
+import { Holding } from '../../database/schema';
+
+interface Props {
+  visible: boolean;
+  portfolioId: string;
+  onClose: () => void;
+  onImported: () => void;
+}
+
+type Step = 'idle' | 'parsing' | 'preview' | 'importing';
+
+interface Summary {
+  matchedRows: ParsedRow[];      // 组合内标的的交易
+  matchedTickers: string[];
+  outsideTickers: string[];      // CSV 中有但组合里没有的标的
+  skippedByFormat: number;       // 期权/利息等格式跳过
+}
+
+export default function ImportModal({ visible, portfolioId, onClose, onImported }: Props) {
+  const { batchImportTransactions } = usePortfolioStore();
+  const [step, setStep] = useState<Step>('idle');
+  const [summary, setSummary] = useState<Summary | null>(null);
+
+  // 读取当前组合的持仓 ticker 集合
+  const holdings = useQuery(Holding).filtered(
+    `portfolioId == oid(${portfolioId}) AND isDisabled == false`,
+  );
+  const portfolioTickers = new Set(Array.from(holdings).map(h => h.ticker));
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.pickSingle({
+        type: [types.csv, types.plainText, 'public.comma-separated-values-text'],
+        copyTo: 'documentDirectory',
+      });
+
+      setStep('parsing');
+
+      const filePath = result.fileCopyUri
+        ? decodeURIComponent(result.fileCopyUri.replace('file://', ''))
+        : result.uri.replace('file://', '');
+
+      const content = await RNFS.readFile(filePath, 'utf8');
+      const parsed = parseCSV(content);
+
+      // 按组合持仓过滤
+      const matchedRows = parsed.rows.filter(r => portfolioTickers.has(r.ticker));
+      const allCsvTickers = [...new Set(parsed.rows.map(r => r.ticker))];
+      const matchedTickers = [...new Set(matchedRows.map(r => r.ticker))];
+      const outsideTickers = allCsvTickers.filter(t => !portfolioTickers.has(t));
+
+      if (matchedRows.length === 0) {
+        Alert.alert(
+          '无可导入记录',
+          `CSV 中的标的（${allCsvTickers.join('、')}）均不在当前组合中\n请先在持仓明细中添加相应标的`,
+        );
+        setStep('idle');
+        return;
+      }
+
+      setSummary({ matchedRows, matchedTickers, outsideTickers, skippedByFormat: parsed.skipped });
+      setStep('preview');
+    } catch (e: any) {
+      if (!DocumentPicker.isCancel(e)) {
+        Alert.alert('读取失败', e?.message ?? '请确认文件格式为 UTF-8 CSV');
+      }
+      setStep('idle');
+    }
+  };
+
+  const handleConfirmImport = () => {
+    if (!summary) return;
+    setStep('importing');
+    try {
+      const { imported } = batchImportTransactions(portfolioId, summary.matchedRows);
+      Alert.alert(
+        '导入成功',
+        `已导入 ${imported} 条交易记录`,
+        [{ text: '确定', onPress: () => { resetAndClose(); onImported(); } }],
+      );
+    } catch (e: any) {
+      Alert.alert('导入失败', e?.message ?? '请重试');
+      setStep('preview');
+    }
+  };
+
+  const resetAndClose = () => {
+    setStep('idle');
+    setSummary(null);
+    onClose();
+  };
+
+  const TYPE_LABEL: Record<string, string> = {
+    buy: '买入',
+    sell: '卖出',
+    dividend: '分红',
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={resetAndClose}>
+      <View style={styles.container}>
+        {/* 顶栏 */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={resetAndClose}>
+            <Text style={styles.cancelBtn}>取消</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>导入交易记录</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* 空闲 / 解析中 */}
+        {(step === 'idle' || step === 'parsing') && (
+          <View style={styles.idleArea}>
+            <Text style={styles.hint}>
+              仅导入当前组合已有持仓的交易记录{'\n'}
+              支持券商导出的 CSV 格式
+            </Text>
+            <Text style={styles.subHint}>
+              组合外标的、期权、利息等自动跳过
+            </Text>
+            {step === 'parsing' ? (
+              <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: Spacing.xl }} />
+            ) : (
+              <TouchableOpacity style={styles.pickBtn} onPress={handlePickFile}>
+                <Text style={styles.pickBtnText}>选择 CSV 文件</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* 预览 */}
+        {step === 'preview' && summary && (
+          <>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+              {/* 匹配统计 */}
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryTitle}>解析结果</Text>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>将导入</Text>
+                  <Text style={[styles.summaryValue, { color: Colors.profit }]}>
+                    {summary.matchedRows.length} 条
+                  </Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>匹配标的</Text>
+                  <Text style={styles.summaryValue}>{summary.matchedTickers.length} 只</Text>
+                </View>
+                <Text style={styles.tickerList}>{summary.matchedTickers.join('  ·  ')}</Text>
+              </View>
+
+              {/* 跳过统计 */}
+              {(summary.outsideTickers.length > 0 || summary.skippedByFormat > 0) && (
+                <View style={[styles.summaryCard, styles.skipCard]}>
+                  <Text style={styles.summaryTitle}>已跳过</Text>
+                  {summary.outsideTickers.length > 0 && (
+                    <>
+                      <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>不在组合中</Text>
+                        <Text style={styles.summaryValue}>{summary.outsideTickers.length} 只标的</Text>
+                      </View>
+                      <Text style={styles.skipTickerList}>{summary.outsideTickers.join('  ·  ')}</Text>
+                    </>
+                  )}
+                  {summary.skippedByFormat > 0 && (
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>格式/期权/利息</Text>
+                      <Text style={styles.summaryValue}>{summary.skippedByFormat} 行</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* 预览前 20 条 */}
+              <Text style={styles.previewTitle}>交易预览（前 20 条）</Text>
+              {summary.matchedRows.slice(0, 20).map((row, idx) => (
+                <View key={idx} style={styles.previewRow}>
+                  <Text style={styles.previewDate}>
+                    {row.date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}
+                  </Text>
+                  <Text style={[
+                    styles.previewType,
+                    { color: row.type === 'buy' ? Colors.profit : row.type === 'sell' ? Colors.loss : Colors.neutral },
+                  ]}>
+                    {TYPE_LABEL[row.type] ?? row.type}
+                  </Text>
+                  <Text style={styles.previewTicker}>{row.ticker}</Text>
+                  <Text style={styles.previewShares}>{row.shares}</Text>
+                  <Text style={styles.previewPrice}>@{row.price.toFixed(2)}</Text>
+                </View>
+              ))}
+              {summary.matchedRows.length > 20 && (
+                <Text style={styles.moreHint}>…还有 {summary.matchedRows.length - 20} 条</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity style={styles.importBtn} onPress={handleConfirmImport}>
+              <Text style={styles.importBtnText}>确认导入 {summary.matchedRows.length} 条</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* 导入中 */}
+        {step === 'importing' && (
+          <View style={styles.idleArea}>
+            <ActivityIndicator size="large" color={Colors.primary} />
+            <Text style={styles.hint}>正在写入数据库…</Text>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.background },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  cancelBtn: { color: Colors.textSecondary, fontSize: FontSize.md },
+  title: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+  idleArea: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  hint: { color: Colors.textSecondary, fontSize: FontSize.sm, textAlign: 'center', lineHeight: 22 },
+  subHint: { color: Colors.textTertiary, fontSize: FontSize.xs, textAlign: 'center', marginTop: Spacing.xs },
+  pickBtn: {
+    marginTop: Spacing.xl,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+  },
+  pickBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+  summaryCard: {
+    margin: Spacing.md,
+    marginBottom: 0,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+  },
+  skipCard: {
+    backgroundColor: Colors.surfaceElevated,
+  },
+  summaryTitle: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, marginBottom: Spacing.sm },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  summaryLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
+  summaryValue: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  tickerList: { color: Colors.primary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
+  skipTickerList: { color: Colors.textTertiary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
+  previewTitle: {
+    color: Colors.textTertiary,
+    fontSize: FontSize.xs,
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+    marginBottom: 4,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  previewDate: { color: Colors.textTertiary, fontSize: FontSize.xs, width: 44 },
+  previewType: { fontSize: FontSize.xs, width: 32 },
+  previewTicker: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, flex: 1 },
+  previewShares: { color: Colors.textSecondary, fontSize: FontSize.xs, width: 50, textAlign: 'right' },
+  previewPrice: { color: Colors.textTertiary, fontSize: FontSize.xs, width: 70, textAlign: 'right' },
+  moreHint: { color: Colors.textTertiary, fontSize: FontSize.xs, textAlign: 'center', paddingVertical: Spacing.sm },
+  importBtn: {
+    margin: Spacing.md,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    alignItems: 'center',
+  },
+  importBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+});
+
