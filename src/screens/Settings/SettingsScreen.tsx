@@ -6,13 +6,13 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Share,
   Alert,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import RNFS from 'react-native-fs';
-import DocumentPicker from 'react-native-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Sharing from 'expo-sharing';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';
 import { useThemeStore } from '../../store/themeStore';
@@ -32,9 +32,9 @@ export default function SettingsScreen() {
       const json = exportAllData();
       const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const filename = `portfolio_backup_${date}.json`;
-      const filePath = `${RNFS.TemporaryDirectoryPath}${filename}`;
-      await RNFS.writeFile(filePath, json, 'utf8');
-      await Share.share({ url: `file://${filePath}`, title: filename });
+      const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(fileUri, json, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(fileUri, { mimeType: 'application/json', dialogTitle: filename });
     } catch (e: any) {
       Alert.alert('导出失败', e?.message ?? '未知错误');
     } finally {
@@ -45,18 +45,17 @@ export default function SettingsScreen() {
   // ── 导入 ───────────────────────────────────────────────
   const handleImport = async () => {
     try {
-      const result = await DocumentPicker.pickSingle({
-        type: [DocumentPicker.types.allFiles],
-        copyTo: 'documentDirectory',
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', 'text/plain', '*/*'],
+        copyToCacheDirectory: true,
       });
+
+      if (picked.canceled) return;
 
       setBusy(true);
 
-      const filePath = result.fileCopyUri
-        ? decodeURIComponent(result.fileCopyUri.replace('file://', ''))
-        : result.uri.replace('file://', '');
-
-      const json = await RNFS.readFile(filePath, 'utf8');
+      const fileUri = picked.assets[0].uri;
+      const json = await FileSystem.readAsStringAsync(fileUri);
       const backup = JSON.parse(json);
 
       if (!backup || backup.version !== 1 || !Array.isArray(backup.portfolios)) {
@@ -96,9 +95,7 @@ export default function SettingsScreen() {
         ],
       );
     } catch (e: any) {
-      if (!DocumentPicker.isCancel(e)) {
-        Alert.alert('读取失败', e?.message ?? '请选择有效的备份文件');
-      }
+      Alert.alert('读取失败', e?.message ?? '请选择有效的备份文件');
       setBusy(false);
     }
   };

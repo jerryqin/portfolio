@@ -1,4 +1,27 @@
 {
-  "name": "portfolio",
-  "displayName": "portfolio"
+  "expo": {
+    "name": "portfolio",
+    "slug": "portfolio",
+    "version": "0.1.2",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.jerryqin.portfolio",
+      "buildNumber": "2",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-document-picker"
+    ],
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
+  }
 }

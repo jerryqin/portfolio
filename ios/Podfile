@@ -22,7 +22,7 @@ target 'portfolio' do
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/..",
     # Disable New Architecture to avoid folly/coroutine compatibility issues
-    :new_arch_enabled => false
+    :new_arch_enabled => true
   )
 
   post_install do |installer|
@@ -37,6 +37,12 @@ target 'portfolio' do
       target.build_configurations.each do |config|
         config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
       end
+    end
+
+    # Remove the ExpoModulesProvider.swift file that was leftover from expo migration
+    expo_modules_provider = "#{installer.config.installation_root}/Pods/Target Support Files/Pods-portfolio/ExpoModulesProvider.swift"
+    if File.exist?(expo_modules_provider)
+      File.write(expo_modules_provider, "// Stub - expo modules removed\n")
     end
   end
 end

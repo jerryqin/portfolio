@@ -9,8 +9,8 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import DocumentPicker, { types } from 'react-native-document-picker';
-import RNFS from 'react-native-fs';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { useQuery } from '@realm/react';
 import Realm from 'realm';
 import { ThemeColors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
@@ -51,18 +51,17 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
 
   const handlePickFile = async () => {
     try {
-      const result = await DocumentPicker.pickSingle({
-        type: [types.csv, types.plainText, 'public.comma-separated-values-text'],
-        copyTo: 'documentDirectory',
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/plain', 'public.comma-separated-values-text', '*/*'],
+        copyToCacheDirectory: true,
       });
+
+      if (picked.canceled) return;
 
       setStep('parsing');
 
-      const filePath = result.fileCopyUri
-        ? decodeURIComponent(result.fileCopyUri.replace('file://', ''))
-        : result.uri.replace('file://', '');
-
-      const content = await RNFS.readFile(filePath, 'utf8');
+      const fileUri = picked.assets[0].uri;
+      const content = await FileSystem.readAsStringAsync(fileUri);
       const parsed = parseCSV(content);
 
       // 按组合持仓过滤
@@ -102,9 +101,7 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
       setSummary({ matchedRows, matchedTickers, outsideTickers, skippedByFormat: parsed.skipped, cashRows: allCashRows });
       setStep('preview');
     } catch (e: any) {
-      if (!DocumentPicker.isCancel(e)) {
-        Alert.alert('读取失败', e?.message ?? '请确认文件格式为 UTF-8 CSV');
-      }
+      Alert.alert('读取失败', e?.message ?? '请确认文件格式为 UTF-8 CSV');
       setStep('idle');
     }
   };
