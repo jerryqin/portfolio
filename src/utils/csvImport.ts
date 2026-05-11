@@ -15,10 +15,18 @@ export interface ParsedRow {
   notes: string;
 }
 
+/** 不涉及持仓但有现金流的行（期权溢价、利息、未知类型等） */
+export interface CashAdjustRow {
+  date: Date;
+  amount: number;   // 正数=现金流入, 负数=现金流出
+  notes: string;    // rawType + 说明，用于审计
+}
+
 export interface ImportSummary {
   rows: ParsedRow[];
   tickers: string[];
   skipped: number;
+  cashRows: CashAdjustRow[];  // 仅影响现金、不创建持仓记录的行
 }
 
 /** 解析带引号的 CSV 行，正确处理字段内部的逗号 */
@@ -95,6 +103,7 @@ export function parseCSV(text: string): ImportSummary {
   };
 
   const rows: ParsedRow[] = [];
+  const cashRows: CashAdjustRow[] = [];
   let skipped = 0;
 
   for (let i = headerIndex + 1; i < lines.length; i++) {
@@ -104,22 +113,38 @@ export function parseCSV(text: string): ImportSummary {
     const rawType   = fields[COL.type]   ?? '';
     const rawTicker = fields[COL.ticker] ?? '';
     const rawDate   = fields[COL.date]   ?? '';
+    const amount    = parseNumber(fields[COL.amount] ?? '0');
+    const rawNotes  = fields[COL.notes] ?? '';
 
-    // 跳过无代码行（如利息）
-    if (!rawTicker) { skipped++; continue; }
+    // 完全空行（无代码、无金额）→ 真正跳过
+    if (!rawTicker && amount === 0) { skipped++; continue; }
 
-    // 跳过期权
-    if (isOptionTicker(rawTicker)) { skipped++; continue; }
+    // 期权交易（代号含数字）→ 只记录现金流，不创建持仓
+    if (rawTicker && isOptionTicker(rawTicker)) {
+      if (amount !== 0) {
+        cashRows.push({ date: parseDate(rawDate), amount, notes: `期权 ${rawTicker} ${rawType} ${rawNotes}`.trim() });
+      }
+      continue;
+    }
 
     const txType = TYPE_MAP[rawType];
-    if (txType === undefined) { skipped++; continue; } // 未知类型
-    if (txType === null) { skipped++; continue; }      // 利息收入等
+
+    // 利息收入、未知类型 → 只记录现金流
+    if (txType === undefined || txType === null) {
+      if (amount !== 0) {
+        cashRows.push({ date: parseDate(rawDate), amount, notes: `${rawType} ${rawTicker} ${rawNotes}`.trim() });
+      } else {
+        skipped++;
+      }
+      continue;
+    }
+
+    // 无代码行（理论上不会到这里，但保险起见）
+    if (!rawTicker) { skipped++; continue; }
 
     const sharesRaw = parseNumber(fields[COL.shares] ?? '0');
-    // 数量取绝对值，方向由 type 决定
     const shares = Math.abs(sharesRaw);
     const price  = parseNumber(fields[COL.price]  ?? '0');
-    const amount = parseNumber(fields[COL.amount] ?? '0');
 
     // 股息价格为0，但数量可以是0，金额不为0
     if (shares === 0 && txType !== 'dividend') { skipped++; continue; }
@@ -131,7 +156,7 @@ export function parseCSV(text: string): ImportSummary {
       shares,
       price,
       amount,
-      notes: fields[COL.notes] ?? '',
+      notes: rawNotes,
     });
   }
 
@@ -140,5 +165,5 @@ export function parseCSV(text: string): ImportSummary {
 
   const tickers = [...new Set(rows.map(r => r.ticker))];
 
-  return { rows, tickers, skipped };
+  return { rows, tickers, skipped, cashRows };
 }

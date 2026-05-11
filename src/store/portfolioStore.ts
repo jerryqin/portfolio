@@ -5,7 +5,7 @@ import { getRealm } from '../database';
 import { Portfolio, Holding, Transaction, PortfolioSnapshot, DailySnapshot } from '../database/schema';
 import { fetchBatchQuotes } from '../services/yahooFinance';
 import { calcAvgCost } from '../utils/finance';
-import type { ParsedRow } from '../utils/csvImport';
+import type { ParsedRow, CashAdjustRow } from '../utils/csvImport';
 
 interface PortfolioStore {
   // 当前选中组合
@@ -48,7 +48,7 @@ interface PortfolioStore {
   activatePortfolio: (portfolioId: string) => { ok: boolean; error?: string };
 
   // 批量导入 CSV 交易流水
-  batchImportTransactions: (portfolioId: string, rows: ParsedRow[]) => {
+  batchImportTransactions: (portfolioId: string, rows: ParsedRow[], cashRows?: CashAdjustRow[]) => {
     imported: number;
   };
 
@@ -269,7 +269,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     }
   },
 
-  batchImportTransactions: (portfolioId, rows) => {
+  batchImportTransactions: (portfolioId, rows, cashRows = []) => {
     const realm = getRealm();
     const pId = new Realm.BSON.ObjectId(portfolioId);
     let imported = 0;
@@ -358,6 +358,13 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         holding.updatedAt = new Date();
         imported++;
       }
+
+      // 应用现金调整行（期权溢价、利息收入等）到现金余额
+      if (portfolio && cashRows.length > 0) {
+        for (const cr of cashRows) {
+          portfolio.currentCapital += cr.amount;
+        }
+      }
     });
 
     // 逐日模拟历史净值，生成 DailySnapshot 供最大回撤/夏普计算
@@ -391,11 +398,25 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         else if (row.type === 'sell') totalNetCashFlow += row.shares * row.price;
         else if (row.type === 'dividend') totalNetCashFlow += row.amount;
       }
+      // 现金调整行（期权、利息等）也计入净流入
+      for (const cr of cashRows) {
+        totalNetCashFlow += cr.amount;
+      }
+
+      // 按日期整理现金调整行，合并进日模拟
+      const cashByDate = new Map<string, number>();
+      for (const cr of cashRows) {
+        const d = cr.date;
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        cashByDate.set(dateStr, (cashByDate.get(dateStr) ?? 0) + cr.amount);
+      }
       // simCash 起点 = 当前现金 - CSV净流入（即 CSV 开始前的现金）
       let simCash = Math.max(preCapital - totalNetCashFlow, 0);
 
-      const minDate = new Date(dates[0]);
-      const maxDate = new Date(dates[dates.length - 1]);
+      // 日期范围：涵盖持仓交易 + 现金调整行
+      const allDates = [...new Set([...dates, ...[...cashByDate.keys()]])].sort();
+      const minDate = new Date(allDates[0]);
+      const maxDate = new Date(allDates[allDates.length - 1]);
       maxDate.setDate(maxDate.getDate() + 1);
 
       realm.write(() => {
@@ -405,8 +426,8 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
           .filtered('portfolioId == $0 AND date >= $1 AND date < $2', pId, minDate, maxDate);
         realm.delete(existingSnaps);
 
-        for (const dateStr of dates) {
-          const dayRows = byDate.get(dateStr)!;
+        for (const dateStr of allDates) {
+          const dayRows = byDate.get(dateStr) ?? [];
           for (const row of dayRows) {
             simPrice.set(row.ticker, row.price);
             if (row.type === 'buy') {
@@ -422,6 +443,10 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
             } else if (row.type === 'dividend') {
               simCash += row.amount;
             }
+          }
+          // 当日现金调整（期权溢价、利息等）
+          if (cashByDate.has(dateStr)) {
+            simCash += cashByDate.get(dateStr)!;
           }
 
           let totalValue = 0;

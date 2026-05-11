@@ -14,7 +14,7 @@ import RNFS from 'react-native-fs';
 import { useQuery } from '@realm/react';
 import Realm from 'realm';
 import { Colors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
-import { parseCSV, ParsedRow } from '../../utils/csvImport';
+import { parseCSV, ParsedRow, CashAdjustRow } from '../../utils/csvImport';
 import { usePortfolioStore } from '../../store/portfolioStore';
 import { Holding } from '../../database/schema';
 
@@ -31,7 +31,8 @@ interface Summary {
   matchedRows: ParsedRow[];      // 组合内标的的交易
   matchedTickers: string[];
   outsideTickers: string[];      // CSV 中有但组合里没有的标的
-  skippedByFormat: number;       // 期权/利息等格式跳过
+  skippedByFormat: number;       // 无现金影响的空行等
+  cashRows: CashAdjustRow[];     // 期权溢价、利息等现金调整行
 }
 
 export default function ImportModal({ visible, portfolioId, onClose, onImported }: Props) {
@@ -67,7 +68,26 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
       const matchedTickers = [...new Set(matchedRows.map(r => r.ticker))];
       const outsideTickers = allCsvTickers.filter(t => !portfolioTickers.has(t));
 
-      if (matchedRows.length === 0) {
+      // 组合外标的（如已平仓的 AMKR 等）：把每笔买卖折算成现金流并入 cashRows
+      // 买入→现金减少，卖出/股息→现金增加，确保其净资产影响被正确计入
+      const outsideCashRows: import('../../utils/csvImport').CashAdjustRow[] = [];
+      for (const row of parsed.rows) {
+        if (portfolioTickers.has(row.ticker)) continue;
+        let cashDelta = 0;
+        if (row.type === 'buy') cashDelta = -(row.shares * row.price);
+        else if (row.type === 'sell') cashDelta = row.shares * row.price;
+        else if (row.type === 'dividend') cashDelta = row.amount;
+        if (cashDelta !== 0) {
+          outsideCashRows.push({
+            date: row.date,
+            amount: cashDelta,
+            notes: `已平仓 ${row.ticker} ${row.type === 'buy' ? '买入' : row.type === 'sell' ? '卖出' : '股息'}`,
+          });
+        }
+      }
+      const allCashRows = [...parsed.cashRows, ...outsideCashRows];
+
+      if (matchedRows.length === 0 && allCashRows.length === 0) {
         Alert.alert(
           '无可导入记录',
           `CSV 中的标的（${allCsvTickers.join('、')}）均不在当前组合中\n请先在持仓明细中添加相应标的`,
@@ -76,7 +96,7 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
         return;
       }
 
-      setSummary({ matchedRows, matchedTickers, outsideTickers, skippedByFormat: parsed.skipped });
+      setSummary({ matchedRows, matchedTickers, outsideTickers, skippedByFormat: parsed.skipped, cashRows: allCashRows });
       setStep('preview');
     } catch (e: any) {
       if (!DocumentPicker.isCancel(e)) {
@@ -90,10 +110,11 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
     if (!summary) return;
     setStep('importing');
     try {
-      const { imported } = batchImportTransactions(portfolioId, summary.matchedRows);
+      const { imported } = batchImportTransactions(portfolioId, summary.matchedRows, summary.cashRows);
+      const cashAdj = summary.cashRows.length > 0 ? `\n另含 ${summary.cashRows.length} 条现金调整（期权/利息）` : '';
       Alert.alert(
         '导入成功',
-        `已导入 ${imported} 条交易记录`,
+        `已导入 ${imported} 条交易记录${cashAdj}`,
         [{ text: '确定', onPress: () => { resetAndClose(); onImported(); } }],
       );
     } catch (e: any) {
@@ -167,21 +188,21 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
               </View>
 
               {/* 跳过统计 */}
-              {(summary.outsideTickers.length > 0 || summary.skippedByFormat > 0) && (
+              {(summary.outsideTickers.length > 0 || summary.skippedByFormat > 0 || summary.cashRows.length > 0) && (
                 <View style={[styles.summaryCard, styles.skipCard]}>
-                  <Text style={styles.summaryTitle}>已跳过</Text>
+                  <Text style={styles.summaryTitle}>现金调整</Text>
+                  {summary.cashRows.length > 0 && (
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>已平仓/期权/利息等</Text>
+                      <Text style={[styles.summaryValue, { color: Colors.profit }]}>{summary.cashRows.length} 笔 ✓ 计入现金</Text>
+                    </View>
+                  )}
                   {summary.outsideTickers.length > 0 && (
-                    <>
-                      <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>不在组合中</Text>
-                        <Text style={styles.summaryValue}>{summary.outsideTickers.length} 只标的</Text>
-                      </View>
-                      <Text style={styles.skipTickerList}>{summary.outsideTickers.join('  ·  ')}</Text>
-                    </>
+                    <Text style={styles.skipTickerList}>{summary.outsideTickers.join('  ·  ')}</Text>
                   )}
                   {summary.skippedByFormat > 0 && (
                     <View style={styles.summaryRow}>
-                      <Text style={styles.summaryLabel}>格式/期权/利息</Text>
+                      <Text style={styles.summaryLabel}>无效行</Text>
                       <Text style={styles.summaryValue}>{summary.skippedByFormat} 行</Text>
                     </View>
                   )}
