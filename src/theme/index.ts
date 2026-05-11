@@ -1,4 +1,4 @@
-export const Colors = {
+export const DarkColors = {
   // 背景层级
   background: '#0D0D0F',
   surface: '#1A1A1F',
@@ -9,7 +9,7 @@ export const Colors = {
   primary: '#4F8EF7',
   primaryDark: '#3A6FD8',
 
-  // 盈亏颜色（A股反色：红涨绿跌，美股绿涨红跌，此处采用美股惯例）
+  // 盈亏颜色（美股惯例：绿涨红跌）
   profit: '#00C48C',
   loss: '#FF5C5C',
   neutral: '#8A8A99',
@@ -20,13 +20,48 @@ export const Colors = {
   textTertiary: '#6B6B7B',
 
   // 三层仓位色
-  coreColor: '#4F8EF7',    // 核心仓 - 蓝
-  satelliteColor: '#A78BFA', // 卫星仓 - 紫
-  tradingColor: '#F59E0B',  // 交易仓 - 金
+  coreColor: '#4F8EF7',
+  satelliteColor: '#A78BFA',
+  tradingColor: '#F59E0B',
 
   // 现金
   cashColor: '#6B7280',
 };
+
+export const LightColors = {
+  // 背景层级
+  background: '#F2F2F7',
+  surface: '#FFFFFF',
+  surfaceElevated: '#F2F2F7',
+  border: '#E5E5EA',
+
+  // 主色
+  primary: '#007AFF',
+  primaryDark: '#0063CC',
+
+  // 盈亏颜色
+  profit: '#34C759',
+  loss: '#FF3B30',
+  neutral: '#8E8E93',
+
+  // 文字层级
+  textPrimary: '#000000',
+  textSecondary: '#3C3C43',
+  textTertiary: '#8E8E93',
+
+  // 三层仓位色
+  coreColor: '#007AFF',
+  satelliteColor: '#AF52DE',
+  tradingColor: '#FF9500',
+
+  // 现金
+  cashColor: '#8E8E93',
+};
+
+// 默认导出深色主题（向后兼容旧 import，会被 useColors 动态替换）
+export const Colors = DarkColors;
+
+export type ThemeColors = typeof DarkColors;
 
 export const Spacing = {
   xs: 4,

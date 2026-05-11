@@ -272,7 +272,6 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
   batchImportTransactions: (portfolioId, rows, cashRows = []) => {
     const realm = getRealm();
     const pId = new Realm.BSON.ObjectId(portfolioId);
-    let imported = 0;
 
     // 只操作已有持仓，不自动创建
     const existingHoldings = realm
@@ -283,178 +282,170 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
       holdingMap.set(h.ticker, h);
     }
 
-    // 导入前快照，用于逐日模拟净值
-    const portfolioPre = realm.objectForPrimaryKey(Portfolio, pId);
-    const preCapital = portfolioPre?.currentCapital ?? 0;
-    const preInitialCapital = portfolioPre?.initialCapital ?? 1;
-    const preHoldings = Array.from(existingHoldings).map(h => ({
-      ticker: h.ticker,
-      shares: h.shares,
-      avgCost: h.avgCost,
-      currentPrice: h.currentPrice > 0 ? h.currentPrice : h.avgCost,
-    }));
+    const portfolioSnap = realm.objectForPrimaryKey(Portfolio, pId);
+    if (!portfolioSnap) return { imported: 0 };
+    const initialCapital = portfolioSnap.initialCapital;
+
+    let imported = 0;
+
+    // 四舍五入到4位小数，消除浮点 toString 差异导致的去重失效
+    const r4 = (n: number) => Math.round(n * 10000) / 10000;
+    const makeKey = (ticker: string, type: string, date: Date, shares: number, price: number) => {
+      const d = date;
+      return `${ticker}|${type}|${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${r4(shares)}|${r4(price)}`;
+    };
 
     realm.write(() => {
       const portfolio = realm.objectForPrimaryKey(Portfolio, pId);
+      if (!portfolio) return;
 
-      // 查出已有的 isImported 流水（ticker + date + type + shares），用于去重
+      // ── 构建去重集合（已存在的导入流水）──
       const existingImported = realm
         .objects(Transaction)
         .filtered('portfolioId == $0 AND isImported == true', pId);
       const importedKeys = new Set<string>();
       for (const tx of existingImported) {
-        const d = tx.date;
-        const key = `${tx.ticker}|${tx.type}|${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${tx.shares}|${tx.price}`;
-        importedKeys.add(key);
+        importedKeys.add(makeKey(tx.ticker, tx.type, tx.date, tx.shares, tx.price));
       }
 
+      // ── 写入股票交易（只写去重后的新流水，以 delta 更新持仓和现金）──
       for (const row of rows) {
-        // 不在组合持仓中的 ticker 直接跳过
         if (!holdingMap.has(row.ticker)) continue;
 
-        // 去重：完全相同的导入记录跳过
-        const d = row.date;
-        const dedupKey = `${row.ticker}|${row.type}|${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${row.shares}|${row.price}`;
-        if (importedKeys.has(dedupKey)) { continue; }
-        importedKeys.add(dedupKey);
+        // 股息若 shares/price 均为0，将总金额编码为 price=amount, shares=1，便于后续重算
+        const storedShares = (row.type === 'dividend' && row.shares === 0) ? 1 : row.shares;
+        const storedPrice  = (row.type === 'dividend' && row.shares === 0) ? row.amount : row.price;
+
+        const key = makeKey(row.ticker, row.type, row.date, storedShares, storedPrice);
+        if (importedKeys.has(key)) continue;
+        importedKeys.add(key);
 
         const holding = holdingMap.get(row.ticker)!;
 
-        // 写入交易流水
         realm.create(Transaction, {
           portfolioId: pId,
           holdingId: holding._id,
           ticker: row.ticker,
           type: row.type,
           date: row.date,
-          price: row.price,
-          shares: row.shares,
+          price: storedPrice,
+          shares: storedShares,
           commission: 0,
           tax: 0,
           notes: row.notes,
           isImported: true,
         });
 
-        // 更新持仓状态
+        // 持仓 delta（仅对本次新写入的流水）
         if (row.type === 'buy') {
           holding.avgCost = calcAvgCost(holding.shares, holding.avgCost, row.shares, row.price);
           holding.shares += row.shares;
         } else if (row.type === 'sell') {
           holding.shares = Math.max(0, holding.shares - row.shares);
         }
-        // dividend 只记录流水，不改变 shares/avgCost
 
-        // 更新现金
-        if (portfolio) {
-          if (row.type === 'buy') {
-            portfolio.currentCapital -= row.shares * row.price;
-          } else if (row.type === 'sell') {
-            portfolio.currentCapital += row.shares * row.price;
-          } else if (row.type === 'dividend') {
-            portfolio.currentCapital += row.amount;
-          }
-        }
+        // 现金 delta（仅对本次新写入的流水）
+        if (row.type === 'buy')           portfolio.currentCapital -= row.shares * row.price;
+        else if (row.type === 'sell')     portfolio.currentCapital += row.shares * row.price;
+        else if (row.type === 'dividend') portfolio.currentCapital += row.amount;
 
         holding.updatedAt = new Date();
         imported++;
       }
 
-      // 应用现金调整行（期权溢价、利息收入等）到现金余额
-      if (portfolio && cashRows.length > 0) {
+      // ── 写入现金调整行（存为 __CASH__ dividend，天然去重，彻底防止重复叠加）──
+      // 兼容旧版本迁移：若本次 imported=0（全部已存在）且 __CASH__ 流水也为0，
+      // 说明是旧代码导入的数据（cashRows 已直接加入 currentCapital），跳过以防重复。
+      const existingCashTxCount = realm
+        .objects(Transaction)
+        .filtered('portfolioId == $0 AND ticker == "__CASH__"', pId).length;
+      const isLegacyData = imported === 0 && existingCashTxCount === 0 &&
+        existingImported.length > 0;
+
+      if (!isLegacyData) {
         for (const cr of cashRows) {
+          const key = makeKey('__CASH__', 'dividend', cr.date, 1, cr.amount);
+          if (importedKeys.has(key)) continue;
+          importedKeys.add(key);
+
+          // holdingId 使用 portfolioId 作为占位符（Realm 无外键约束）
+          realm.create(Transaction, {
+            portfolioId: pId,
+            holdingId: pId,
+            ticker: '__CASH__',
+            type: 'dividend',
+            date: cr.date,
+            price: cr.amount,
+            shares: 1,
+            commission: 0,
+            tax: 0,
+            notes: cr.notes,
+            isImported: true,
+          });
+
           portfolio.currentCapital += cr.amount;
         }
       }
     });
 
-    // 逐日模拟历史净值，生成 DailySnapshot 供最大回撤/夏普计算
-    const importedRows = rows.filter(r => holdingMap.has(r.ticker));
-    if (importedRows.length > 0) {
-      const byDate = new Map<string, typeof importedRows>();
-      for (const row of importedRows) {
-        const d = row.date;
+    // ── DailySnapshot：从数据库全量已导入流水重建（幂等）──
+    const allImportedTxs = Array.from(
+      realm.objects(Transaction)
+        .filtered('portfolioId == $0 AND isImported == true', pId)
+        .sorted('date'),
+    );
+
+    if (allImportedTxs.length > 0) {
+      const byDate = new Map<string, typeof allImportedTxs>();
+      for (const tx of allImportedTxs) {
+        const d = tx.date;
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         if (!byDate.has(dateStr)) byDate.set(dateStr, []);
-        byDate.get(dateStr)!.push(row);
+        byDate.get(dateStr)!.push(tx);
       }
-      const dates = [...byDate.keys()].sort();
 
-      // 初始化模拟状态
+      const allDates = [...byDate.keys()].sort();
       const simShares = new Map<string, number>();
-      const simAvgCost = new Map<string, number>();
-      const simPrice = new Map<string, number>();
-      for (const h of preHoldings) {
-        simShares.set(h.ticker, h.shares);
-        simAvgCost.set(h.ticker, h.avgCost);
-        simPrice.set(h.ticker, h.currentPrice);
-      }
+      const simPrice  = new Map<string, number>();
+      // 以 initialCapital 为起点做正向完整回放，彻底消除"逆推现金"的虚假回撤
+      let simCash = initialCapital;
 
-      // 推算 CSV 第一笔交易之前的现金量：
-      // preCapital 是 CSV 全部回放完成后的现金，逆推得到起始现金，
-      // 避免回放大量买入时 simCash 变负，产生虚假的净值暴跌
-      let totalNetCashFlow = 0;
-      for (const row of importedRows) {
-        if (row.type === 'buy') totalNetCashFlow -= row.shares * row.price;
-        else if (row.type === 'sell') totalNetCashFlow += row.shares * row.price;
-        else if (row.type === 'dividend') totalNetCashFlow += row.amount;
-      }
-      // 现金调整行（期权、利息等）也计入净流入
-      for (const cr of cashRows) {
-        totalNetCashFlow += cr.amount;
-      }
-
-      // 按日期整理现金调整行，合并进日模拟
-      const cashByDate = new Map<string, number>();
-      for (const cr of cashRows) {
-        const d = cr.date;
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        cashByDate.set(dateStr, (cashByDate.get(dateStr) ?? 0) + cr.amount);
-      }
-      // simCash 起点 = 当前现金 - CSV净流入（即 CSV 开始前的现金）
-      let simCash = Math.max(preCapital - totalNetCashFlow, 0);
-
-      // 日期范围：涵盖持仓交易 + 现金调整行
-      const allDates = [...new Set([...dates, ...[...cashByDate.keys()]])].sort();
       const minDate = new Date(allDates[0]);
       const maxDate = new Date(allDates[allDates.length - 1]);
       maxDate.setDate(maxDate.getDate() + 1);
 
       realm.write(() => {
-        // 删除该日期范围内已有快照，避免重复
         const existingSnaps = realm
           .objects(DailySnapshot)
           .filtered('portfolioId == $0 AND date >= $1 AND date < $2', pId, minDate, maxDate);
         realm.delete(existingSnaps);
 
         for (const dateStr of allDates) {
-          const dayRows = byDate.get(dateStr) ?? [];
-          for (const row of dayRows) {
-            simPrice.set(row.ticker, row.price);
-            if (row.type === 'buy') {
-              const oldShares = simShares.get(row.ticker) ?? 0;
-              const oldCost = simAvgCost.get(row.ticker) ?? 0;
-              simAvgCost.set(row.ticker, calcAvgCost(oldShares, oldCost, row.shares, row.price));
-              simShares.set(row.ticker, oldShares + row.shares);
-              simCash -= row.shares * row.price;
-            } else if (row.type === 'sell') {
-              const oldShares = simShares.get(row.ticker) ?? 0;
-              simShares.set(row.ticker, Math.max(0, oldShares - row.shares));
-              simCash += row.shares * row.price;
-            } else if (row.type === 'dividend') {
-              simCash += row.amount;
+          const dayTxs = byDate.get(dateStr)!;
+          for (const tx of dayTxs) {
+            if (tx.ticker === '__CASH__') {
+              simCash += tx.price * tx.shares; // 现金调整行
+              continue;
             }
-          }
-          // 当日现金调整（期权溢价、利息等）
-          if (cashByDate.has(dateStr)) {
-            simCash += cashByDate.get(dateStr)!;
+            if (tx.type === 'buy') {
+              simShares.set(tx.ticker, (simShares.get(tx.ticker) ?? 0) + tx.shares);
+              simPrice.set(tx.ticker, tx.price);
+              simCash -= tx.price * tx.shares;
+            } else if (tx.type === 'sell') {
+              simShares.set(tx.ticker, Math.max(0, (simShares.get(tx.ticker) ?? 0) - tx.shares));
+              simPrice.set(tx.ticker, tx.price);
+              simCash += tx.price * tx.shares;
+            } else if (tx.type === 'dividend') {
+              simCash += tx.price * tx.shares;
+            }
           }
 
           let totalValue = 0;
           for (const [ticker, shares] of simShares) {
-            totalValue += shares * (simPrice.get(ticker) ?? simAvgCost.get(ticker) ?? 0);
+            totalValue += shares * (simPrice.get(ticker) ?? 0);
           }
           const totalAssets = totalValue + Math.max(simCash, 0);
-          const nav = totalAssets / preInitialCapital;
+          const nav = initialCapital > 0 ? totalAssets / initialCapital : 1;
           const [y, mo, da] = dateStr.split('-').map(Number);
 
           realm.create(DailySnapshot, {
@@ -578,41 +569,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     const data = JSON.parse(snapshot.dataJson);
 
     realm.write(() => {
-      // 删除持仓和全部交易流水，恢复为快照时的干净状态
-      realm.delete(realm.objects(Holding).filtered('portfolioId == $0', pId));
-      realm.delete(realm.objects(Transaction).filtered('portfolioId == $0', pId));
-
-      // 恢复组合元数据
-      const portfolio = realm.objectForPrimaryKey(Portfolio, pId);
-      if (portfolio) {
-        portfolio.name = data.portfolio.name;
-        portfolio.investmentStyle = data.portfolio.investmentStyle;
-        portfolio.initialCapital = data.portfolio.initialCapital;
-        portfolio.currentCapital = data.portfolio.currentCapital;
-        portfolio.market = data.portfolio.market;
-        portfolio.currency = data.portfolio.currency;
-        portfolio.benchmarkIndex = data.portfolio.benchmarkIndex;
-        portfolio.updatedAt = new Date();
-      }
-
-      // 重建持仓（通常只有几十条，瞬间完成）
-      for (const h of data.holdings) {
-        realm.create(Holding, {
-          portfolioId: pId,
-          ticker: h.ticker,
-          name: h.name,
-          tranche: h.tranche,
-          targetWeight: h.targetWeight,
-          shares: h.shares,
-          avgCost: h.avgCost,
-          initialShares: h.initialShares,
-          initialAvgCost: h.initialAvgCost,
-          currentPrice: h.currentPrice ?? 0,
-          isDisabled: h.isDisabled,
-        });
-      }
-
-      // 恢复 DailySnapshot 历史净值序列
+      // 只恢复 DailySnapshot 历史净值序列，不修改当前持仓/交易/资金
       realm.delete(realm.objects(DailySnapshot).filtered('portfolioId == $0', pId));
       for (const s of (data.dailySnaps ?? [])) {
         realm.create(DailySnapshot, {

@@ -13,7 +13,8 @@ import DocumentPicker, { types } from 'react-native-document-picker';
 import RNFS from 'react-native-fs';
 import { useQuery } from '@realm/react';
 import Realm from 'realm';
-import { Colors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
+import { ThemeColors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
+import { useColors } from '../../theme/useColors';
 import { parseCSV, ParsedRow, CashAdjustRow } from '../../utils/csvImport';
 import { usePortfolioStore } from '../../store/portfolioStore';
 import { Holding } from '../../database/schema';
@@ -36,6 +37,8 @@ interface Summary {
 }
 
 export default function ImportModal({ visible, portfolioId, onClose, onImported }: Props) {
+  const Colors = useColors();
+  const styles = makeStyles(Colors);
   const { batchImportTransactions } = usePortfolioStore();
   const [step, setStep] = useState<Step>('idle');
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -250,8 +253,8 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+function makeStyles(C: ThemeColors) { return StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -259,16 +262,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: C.border,
   },
-  cancelBtn: { color: Colors.textSecondary, fontSize: FontSize.md },
-  title: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+  cancelBtn: { color: C.textSecondary, fontSize: FontSize.md },
+  title: { color: C.textPrimary, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
   idleArea: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  hint: { color: Colors.textSecondary, fontSize: FontSize.sm, textAlign: 'center', lineHeight: 22 },
-  subHint: { color: Colors.textTertiary, fontSize: FontSize.xs, textAlign: 'center', marginTop: Spacing.xs },
+  hint: { color: C.textSecondary, fontSize: FontSize.sm, textAlign: 'center', lineHeight: 22 },
+  subHint: { color: C.textTertiary, fontSize: FontSize.xs, textAlign: 'center', marginTop: Spacing.xs },
   pickBtn: {
     marginTop: Spacing.xl,
-    backgroundColor: Colors.primary,
+    backgroundColor: C.primary,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.md,
     borderRadius: Radius.md,
@@ -277,21 +280,21 @@ const styles = StyleSheet.create({
   summaryCard: {
     margin: Spacing.md,
     marginBottom: 0,
-    backgroundColor: Colors.surface,
+    backgroundColor: C.surface,
     borderRadius: Radius.md,
     padding: Spacing.md,
   },
   skipCard: {
-    backgroundColor: Colors.surfaceElevated,
+    backgroundColor: C.surfaceElevated,
   },
-  summaryTitle: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, marginBottom: Spacing.sm },
+  summaryTitle: { color: C.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, marginBottom: Spacing.sm },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
-  summaryLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
-  summaryValue: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  tickerList: { color: Colors.primary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
-  skipTickerList: { color: Colors.textTertiary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
+  summaryLabel: { color: C.textSecondary, fontSize: FontSize.sm },
+  summaryValue: { color: C.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  tickerList: { color: C.primary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
+  skipTickerList: { color: C.textTertiary, fontSize: FontSize.xs, marginTop: Spacing.xs, lineHeight: 20 },
   previewTitle: {
-    color: Colors.textTertiary,
+    color: C.textTertiary,
     fontSize: FontSize.xs,
     marginHorizontal: Spacing.md,
     marginTop: Spacing.md,
@@ -303,21 +306,21 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: C.border,
   },
-  previewDate: { color: Colors.textTertiary, fontSize: FontSize.xs, width: 44 },
+  previewDate: { color: C.textTertiary, fontSize: FontSize.xs, width: 44 },
   previewType: { fontSize: FontSize.xs, width: 32 },
-  previewTicker: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, flex: 1 },
-  previewShares: { color: Colors.textSecondary, fontSize: FontSize.xs, width: 50, textAlign: 'right' },
-  previewPrice: { color: Colors.textTertiary, fontSize: FontSize.xs, width: 70, textAlign: 'right' },
-  moreHint: { color: Colors.textTertiary, fontSize: FontSize.xs, textAlign: 'center', paddingVertical: Spacing.sm },
+  previewTicker: { color: C.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, flex: 1 },
+  previewShares: { color: C.textSecondary, fontSize: FontSize.xs, width: 50, textAlign: 'right' },
+  previewPrice: { color: C.textTertiary, fontSize: FontSize.xs, width: 70, textAlign: 'right' },
+  moreHint: { color: C.textTertiary, fontSize: FontSize.xs, textAlign: 'center', paddingVertical: Spacing.sm },
   importBtn: {
     margin: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: C.primary,
     borderRadius: Radius.md,
     padding: Spacing.md,
     alignItems: 'center',
   },
   importBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: FontWeight.semibold },
-});
+}); }
 

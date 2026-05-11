@@ -3,39 +3,37 @@ import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions, Platform
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import DashboardScreen from '../screens/Dashboard/DashboardScreen';
-import PortfoliosScreen from '../screens/Portfolios/PortfoliosScreen';
+import AnalyticsScreen from '../screens/Analytics/AnalyticsScreen';
 import HoldingsScreen from '../screens/Holdings/HoldingsScreen';
-import PerformanceScreen from '../screens/Performance/PerformanceScreen';
-import { Colors, Spacing, FontSize, FontWeight, Radius } from '../theme';
+import SettingsScreen from '../screens/Settings/SettingsScreen';
+import { Spacing, FontSize, FontWeight, Radius } from '../theme';
+import { useColors } from '../theme/useColors';
 
 export type TabParamList = {
-  Dashboard: undefined;
-  Portfolios: undefined;
+  Analytics: undefined;
   Holdings: undefined;
-  Performance: undefined;
+  Settings: undefined;
 };
 
 type TabKey = keyof TabParamList;
 
 const TAB_ITEMS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'Dashboard', label: '仪表盘', icon: '📊' },
-  { key: 'Portfolios', label: '我的组合', icon: '📁' },
-  { key: 'Holdings', label: '持仓明细', icon: '📋' },
-  { key: 'Performance', label: '绩效分析', icon: '📈' },
+  { key: 'Analytics', label: '首页', icon: '🏠' },
+  { key: 'Holdings',  label: '持仓', icon: '📋' },
+  { key: 'Settings',  label: '设置', icon: '⚙️' },
 ];
 
 const SCREENS: Record<TabKey, React.ComponentType<any>> = {
-  Dashboard: DashboardScreen,
-  Portfolios: PortfoliosScreen,
-  Holdings: HoldingsScreen,
-  Performance: PerformanceScreen,
+  Analytics: AnalyticsScreen,
+  Holdings:  HoldingsScreen,
+  Settings:  SettingsScreen,
 };
 
 const Tab = createBottomTabNavigator<TabParamList>();
 
 // ─── iPhone：底部 Tab ───────────────────────────────────────
 function PhoneTabNavigator() {
+  const Colors = useColors();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -49,6 +47,10 @@ function PhoneTabNavigator() {
         tabBarInactiveTintColor: Colors.textTertiary,
         tabBarLabelStyle: { fontSize: FontSize.xs },
         tabBarLabel: TAB_ITEMS.find(t => t.key === route.name)?.label ?? route.name,
+        tabBarIcon: ({ color, size }) => {
+          const icon = TAB_ITEMS.find(t => t.key === route.name)?.icon ?? '';
+          return <Text style={{ fontSize: size - 4, color }}>{icon}</Text>;
+        },
       })}>
       {TAB_ITEMS.map(item => (
         <Tab.Screen key={item.key} name={item.key} component={SCREENS[item.key]} />
@@ -57,10 +59,43 @@ function PhoneTabNavigator() {
   );
 }
 
-// ─── iPad：永久侧边栏（纯 View，无需 reanimated）────────────
+// ─── iPad：永久侧边栏 ────────────────────────────────────────
 function PadSidebarLayout() {
-  const [activeTab, setActiveTab] = useState<TabKey>('Dashboard');
+  const Colors = useColors();
+  const [activeTab, setActiveTab] = useState<TabKey>('Analytics');
   const ActiveScreen = SCREENS[activeTab];
+
+  const padStyles = StyleSheet.create({
+    container: { flex: 1, flexDirection: 'row', backgroundColor: Colors.background },
+    sidebar: {
+      width: 220,
+      backgroundColor: Colors.surface,
+      borderRightWidth: 1,
+      borderRightColor: Colors.border,
+      paddingTop: Spacing.xxl,
+      paddingHorizontal: Spacing.md,
+    },
+    appTitle: {
+      fontSize: FontSize.xl,
+      fontWeight: FontWeight.bold,
+      color: Colors.textPrimary,
+      marginBottom: Spacing.xl,
+      paddingHorizontal: Spacing.sm,
+    },
+    sidebarItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: Radius.md,
+      marginBottom: Spacing.xs,
+    },
+    sidebarItemActive: { backgroundColor: Colors.surfaceElevated },
+    sidebarIcon: { fontSize: 18, marginRight: Spacing.sm },
+    sidebarLabel: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+    sidebarLabelActive: { color: Colors.primary, fontWeight: FontWeight.semibold },
+    content: { flex: 1 },
+  });
 
   return (
     <View style={padStyles.container}>
@@ -87,38 +122,6 @@ function PadSidebarLayout() {
     </View>
   );
 }
-
-const padStyles = StyleSheet.create({
-  container: { flex: 1, flexDirection: 'row', backgroundColor: Colors.background },
-  sidebar: {
-    width: 220,
-    backgroundColor: Colors.surface,
-    borderRightWidth: 1,
-    borderRightColor: Colors.border,
-    paddingTop: Spacing.xxl,
-    paddingHorizontal: Spacing.md,
-  },
-  appTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: Spacing.xl,
-    paddingHorizontal: Spacing.sm,
-  },
-  sidebarItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: Radius.md,
-    marginBottom: Spacing.xs,
-  },
-  sidebarItemActive: { backgroundColor: Colors.surfaceElevated },
-  sidebarIcon: { fontSize: 18, marginRight: Spacing.sm },
-  sidebarLabel: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: FontWeight.medium },
-  sidebarLabelActive: { color: Colors.primary, fontWeight: FontWeight.semibold },
-  content: { flex: 1 },
-});
 
 // ─── 根导航：按设备宽度选择 ─────────────────────────────────
 export default function AppNavigator() {

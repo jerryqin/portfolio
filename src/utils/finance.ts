@@ -27,9 +27,10 @@ export function calcTWRR(periods: PeriodPoint[]): number {
 
 /**
  * 计算年化收益率
+ * 持仓不足 30 天时返回 NaN（调用方显示 '--'）
  */
 export function annualizeReturn(totalReturn: number, days: number): number {
-  if (days <= 0) return 0;
+  if (days < 30) return NaN;  // 数据太少，年化无意义
   const years = days / 365;
   return Math.pow(1 + totalReturn, 1 / years) - 1;
 }
