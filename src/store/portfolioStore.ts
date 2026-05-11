@@ -62,6 +62,10 @@ interface PortfolioStore {
   saveSnapshot: (portfolioId: string, label: string) => void;
   restoreSnapshot: (snapshotId: string) => void;
   deleteSnapshot: (snapshotId: string) => void;
+
+  // 全量备份 / 恢复
+  exportAllData: () => string;
+  importAllData: (jsonStr: string) => void;
 }
 
 export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
@@ -593,6 +597,178 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     realm.write(() => {
       const snapshot = realm.objectForPrimaryKey(PortfolioSnapshot, sId);
       if (snapshot) realm.delete(snapshot);
+    });
+  },
+
+  // ── 全量备份 ──────────────────────────────────────────────
+  exportAllData: () => {
+    const realm = getRealm();
+    const portfolios = Array.from(realm.objects(Portfolio));
+
+    const data = portfolios.map(p => {
+      const pId = p._id;
+      const holdings = Array.from(realm.objects(Holding).filtered('portfolioId == $0', pId));
+      const transactions = Array.from(realm.objects(Transaction).filtered('portfolioId == $0', pId));
+      const dailySnaps = Array.from(realm.objects(DailySnapshot).filtered('portfolioId == $0', pId));
+      const portfolioSnaps = Array.from(realm.objects(PortfolioSnapshot).filtered('portfolioId == $0', pId));
+
+      return {
+        _id: p._id.toHexString(),
+        name: p.name,
+        investmentStyle: p.investmentStyle,
+        createdAt: p.createdAt.toISOString(),
+        initialCapital: p.initialCapital,
+        currentCapital: p.currentCapital,
+        market: p.market,
+        currency: p.currency,
+        benchmarkIndex: p.benchmarkIndex,
+        isArchived: p.isArchived,
+        isDraft: p.isDraft,
+        updatedAt: p.updatedAt.toISOString(),
+        holdings: holdings.map(h => ({
+          _id: h._id.toHexString(),
+          ticker: h.ticker,
+          name: h.name,
+          tranche: h.tranche,
+          targetWeight: h.targetWeight,
+          shares: h.shares,
+          avgCost: h.avgCost,
+          initialShares: h.initialShares,
+          initialAvgCost: h.initialAvgCost,
+          currentPrice: h.currentPrice,
+          priceUpdatedAt: h.priceUpdatedAt?.toISOString() ?? null,
+          isDisabled: h.isDisabled,
+        })),
+        transactions: transactions.map(t => ({
+          _id: t._id.toHexString(),
+          holdingId: t.holdingId.toHexString(),
+          ticker: t.ticker,
+          type: t.type,
+          date: t.date.toISOString(),
+          price: t.price,
+          shares: t.shares,
+          commission: t.commission,
+          tax: t.tax,
+          notes: t.notes,
+          isImported: t.isImported,
+        })),
+        dailySnapshots: dailySnaps.map(s => ({
+          _id: s._id.toHexString(),
+          date: s.date.toISOString(),
+          totalValue: s.totalValue,
+          cashFlow: s.cashFlow,
+          navPerUnit: s.navPerUnit,
+          cumulativeReturn: s.cumulativeReturn,
+          maxDrawdown: s.maxDrawdown,
+          volatility: s.volatility,
+          sharpeRatio: s.sharpeRatio,
+        })),
+        portfolioSnapshots: portfolioSnaps.map(s => ({
+          _id: s._id.toHexString(),
+          label: s.label,
+          createdAt: s.createdAt.toISOString(),
+          dataJson: s.dataJson,
+        })),
+      };
+    });
+
+    return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), portfolios: data }, null, 2);
+  },
+
+  // ── 全量恢复（覆盖所有现有数据）────────────────────────────
+  importAllData: (jsonStr) => {
+    const realm = getRealm();
+    const backup = JSON.parse(jsonStr);
+    if (!backup || backup.version !== 1 || !Array.isArray(backup.portfolios)) {
+      throw new Error('备份文件格式不正确');
+    }
+
+    realm.write(() => {
+      // 清空所有现有数据
+      realm.delete(realm.objects(PortfolioSnapshot));
+      realm.delete(realm.objects(DailySnapshot));
+      realm.delete(realm.objects(Transaction));
+      realm.delete(realm.objects(Holding));
+      realm.delete(realm.objects(Portfolio));
+
+      // 逐个重建
+      for (const p of backup.portfolios) {
+        const pId = new Realm.BSON.ObjectId(p._id);
+        realm.create(Portfolio, {
+          _id: pId,
+          name: p.name,
+          investmentStyle: p.investmentStyle ?? '',
+          createdAt: new Date(p.createdAt),
+          initialCapital: p.initialCapital,
+          currentCapital: p.currentCapital,
+          market: p.market ?? 'US',
+          currency: p.currency ?? 'USD',
+          benchmarkIndex: p.benchmarkIndex ?? 'SPY',
+          isArchived: p.isArchived ?? false,
+          isDraft: p.isDraft ?? false,
+          updatedAt: new Date(p.updatedAt),
+        });
+
+        for (const h of (p.holdings ?? [])) {
+          realm.create(Holding, {
+            _id: new Realm.BSON.ObjectId(h._id),
+            portfolioId: pId,
+            ticker: h.ticker,
+            name: h.name ?? '',
+            tranche: h.tranche ?? 'core',
+            targetWeight: h.targetWeight ?? 0,
+            shares: h.shares ?? 0,
+            avgCost: h.avgCost ?? 0,
+            initialShares: h.initialShares ?? 0,
+            initialAvgCost: h.initialAvgCost ?? 0,
+            currentPrice: h.currentPrice ?? 0,
+            priceUpdatedAt: h.priceUpdatedAt ? new Date(h.priceUpdatedAt) : null,
+            isDisabled: h.isDisabled ?? false,
+          });
+        }
+
+        for (const t of (p.transactions ?? [])) {
+          realm.create(Transaction, {
+            _id: new Realm.BSON.ObjectId(t._id),
+            portfolioId: pId,
+            holdingId: new Realm.BSON.ObjectId(t.holdingId),
+            ticker: t.ticker,
+            type: t.type,
+            date: new Date(t.date),
+            price: t.price ?? 0,
+            shares: t.shares ?? 0,
+            commission: t.commission ?? 0,
+            tax: t.tax ?? 0,
+            notes: t.notes ?? '',
+            isImported: t.isImported ?? false,
+          });
+        }
+
+        for (const s of (p.dailySnapshots ?? [])) {
+          realm.create(DailySnapshot, {
+            _id: new Realm.BSON.ObjectId(s._id),
+            portfolioId: pId,
+            date: new Date(s.date),
+            totalValue: s.totalValue ?? 0,
+            cashFlow: s.cashFlow ?? 0,
+            navPerUnit: s.navPerUnit ?? 1,
+            cumulativeReturn: s.cumulativeReturn ?? 0,
+            maxDrawdown: s.maxDrawdown ?? 0,
+            volatility: s.volatility ?? 0,
+            sharpeRatio: s.sharpeRatio ?? 0,
+          });
+        }
+
+        for (const ps of (p.portfolioSnapshots ?? [])) {
+          realm.create(PortfolioSnapshot, {
+            _id: new Realm.BSON.ObjectId(ps._id),
+            portfolioId: pId,
+            label: ps.label ?? '',
+            createdAt: new Date(ps.createdAt),
+            dataJson: ps.dataJson ?? '{}',
+          });
+        }
+      }
     });
   },
 }));

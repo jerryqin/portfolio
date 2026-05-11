@@ -1,20 +1,107 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   Switch,
   StyleSheet,
   ScrollView,
+  TouchableOpacity,
+  Share,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import RNFS from 'react-native-fs';
+import DocumentPicker from 'react-native-document-picker';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';
 import { useThemeStore } from '../../store/themeStore';
+import { usePortfolioStore } from '../../store/portfolioStore';
 
 export default function SettingsScreen() {
   const Colors = useColors();
   const { isDark, toggleTheme } = useThemeStore();
+  const { exportAllData, importAllData, setActivePortfolioId } = usePortfolioStore();
   const styles = makeStyles(Colors);
+  const [busy, setBusy] = useState(false);
+
+  // ── 导出 ───────────────────────────────────────────────
+  const handleExport = async () => {
+    setBusy(true);
+    try {
+      const json = exportAllData();
+      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const filename = `portfolio_backup_${date}.json`;
+      const filePath = `${RNFS.TemporaryDirectoryPath}${filename}`;
+      await RNFS.writeFile(filePath, json, 'utf8');
+      await Share.share({ url: `file://${filePath}`, title: filename });
+    } catch (e: any) {
+      Alert.alert('导出失败', e?.message ?? '未知错误');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ── 导入 ───────────────────────────────────────────────
+  const handleImport = async () => {
+    try {
+      const result = await DocumentPicker.pickSingle({
+        type: [DocumentPicker.types.allFiles],
+        copyTo: 'documentDirectory',
+      });
+
+      setBusy(true);
+
+      const filePath = result.fileCopyUri
+        ? decodeURIComponent(result.fileCopyUri.replace('file://', ''))
+        : result.uri.replace('file://', '');
+
+      const json = await RNFS.readFile(filePath, 'utf8');
+      const backup = JSON.parse(json);
+
+      if (!backup || backup.version !== 1 || !Array.isArray(backup.portfolios)) {
+        Alert.alert('格式错误', '所选文件不是有效的备份文件');
+        setBusy(false);
+        return;
+      }
+
+      const count = backup.portfolios.length;
+      const exportedAt = backup.exportedAt
+        ? new Date(backup.exportedAt).toLocaleString('zh-CN')
+        : '未知';
+
+      Alert.alert(
+        '确认恢复',
+        `备份时间：${exportedAt}\n共 ${count} 个组合\n\n⚠️ 将覆盖所有现有数据，此操作不可撤销。`,
+        [
+          { text: '取消', style: 'cancel', onPress: () => setBusy(false) },
+          {
+            text: '恢复',
+            style: 'destructive',
+            onPress: () => {
+              try {
+                importAllData(json);
+                // 重置活跃组合指向第一个
+                if (backup.portfolios.length > 0) {
+                  setActivePortfolioId(backup.portfolios[0]._id);
+                }
+                Alert.alert('恢复成功', `已还原 ${count} 个组合的全部数据`);
+              } catch (e: any) {
+                Alert.alert('恢复失败', e?.message ?? '数据写入错误');
+              } finally {
+                setBusy(false);
+              }
+            },
+          },
+        ],
+      );
+    } catch (e: any) {
+      if (!DocumentPicker.isCancel(e)) {
+        Alert.alert('读取失败', e?.message ?? '请选择有效的备份文件');
+      }
+      setBusy(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -41,6 +128,40 @@ export default function SettingsScreen() {
               thumbColor={Colors.textPrimary}
             />
           </View>
+        </View>
+
+        {/* 数据备份 */}
+        <Text style={styles.groupHeader}>数据备份</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={handleExport} disabled={busy}>
+            <View style={styles.rowLeft}>
+              <Text style={styles.rowIcon}>📤</Text>
+              <View>
+                <Text style={styles.rowLabel}>导出全部数据</Text>
+                <Text style={styles.rowSub}>组合、持仓、交易、净值历史</Text>
+              </View>
+            </View>
+            {busy ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Text style={styles.rowChevron}>›</Text>
+            )}
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity style={styles.row} onPress={handleImport} disabled={busy}>
+            <View style={styles.rowLeft}>
+              <Text style={styles.rowIcon}>📥</Text>
+              <View>
+                <Text style={styles.rowLabel}>从备份恢复</Text>
+                <Text style={styles.rowSub}>选择 .json 备份文件一键还原</Text>
+              </View>
+            </View>
+            {busy ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Text style={styles.rowChevron}>›</Text>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* 关于 */}
@@ -100,6 +221,8 @@ function makeStyles(C: ThemeColors) {
     rowIcon: { fontSize: 20 },
     rowLabel: { fontSize: FontSize.md, color: C.textPrimary, fontWeight: FontWeight.medium },
     rowSub: { fontSize: FontSize.sm, color: C.textTertiary, marginTop: 2 },
+    rowChevron: { fontSize: 20, color: C.textTertiary },
+    divider: { height: 1, backgroundColor: C.border, marginHorizontal: Spacing.md },
     infoRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
