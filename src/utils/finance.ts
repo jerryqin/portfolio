@@ -51,6 +51,46 @@ export function calcMaxDrawdown(navSeries: number[]): number {
   return maxDD;
 }
 
+export interface DrawdownDetail {
+  maxDD: number;
+  peakNav: number;
+  peakIndex: number;
+  troughNav: number;
+  troughIndex: number;
+}
+
+/**
+ * 计算最大回撤详情，返回峰值/谷值净值及其索引
+ */
+export function calcMaxDrawdownDetail(navSeries: number[]): DrawdownDetail | null {
+  if (navSeries.length < 2) return null;
+  let peak = navSeries[0];
+  let peakIdx = 0;
+  let maxDD = 0;
+  let bestPeakIdx = 0;
+  let bestTroughIdx = 0;
+  for (let i = 0; i < navSeries.length; i++) {
+    const nav = navSeries[i];
+    if (nav > peak) {
+      peak = nav;
+      peakIdx = i;
+    }
+    const dd = (peak - nav) / peak;
+    if (dd > maxDD) {
+      maxDD = dd;
+      bestPeakIdx = peakIdx;
+      bestTroughIdx = i;
+    }
+  }
+  return {
+    maxDD,
+    peakNav: navSeries[bestPeakIdx],
+    peakIndex: bestPeakIdx,
+    troughNav: navSeries[bestTroughIdx],
+    troughIndex: bestTroughIdx,
+  };
+}
+
 /**
  * 计算年化波动率（基于日收益率标准差）
  * @param navSeries 净值序列，按时间升序

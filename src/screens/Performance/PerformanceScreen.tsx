@@ -13,6 +13,7 @@ import { DailySnapshot, Transaction, Holding, Portfolio } from '../../database/s
 import { usePortfolioStore } from '../../store/portfolioStore';
 import {
   calcMaxDrawdown,
+  calcMaxDrawdownDetail,
   calcVolatility,
   calcSharpe,
   annualizeReturn,
@@ -78,6 +79,7 @@ export default function PerformanceScreen() {
   const navSeries = snapshots.map(s => s.navPerUnit);
   const snapDates = snapshots.map(s => s.date);
   const maxDD = calcMaxDrawdown(navSeries);
+  const ddDetail = calcMaxDrawdownDetail(navSeries);
 
   // 波动率需要足够多的快照（至少20个）且跨度足够长（至少60天），否则结果不可靠
   const snapSpanDays = snapDates.length >= 2
@@ -196,6 +198,37 @@ export default function PerformanceScreen() {
         {/* 风险卡片 */}
         <SectionCard title="风险">
           <StatRow label="最大回撤" value={navSeries.length >= 2 ? `-${(maxDD * 100).toFixed(2)}%` : '数据不足'} negative={navSeries.length >= 2} />
+          {ddDetail && ddDetail.maxDD > 0 && (
+            <View style={styles.ddDetailBox}>
+              <View style={styles.ddDetailRow}>
+                <Text style={styles.ddDetailLabel}>峰值净值</Text>
+                <Text style={styles.ddDetailValue}>{ddDetail.peakNav.toFixed(4)}</Text>
+                <Text style={styles.ddDetailDate}>
+                  {snapDates[ddDetail.peakIndex]
+                    ? snapDates[ddDetail.peakIndex].toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+                    : '--'}
+                </Text>
+              </View>
+              <View style={styles.ddDetailRow}>
+                <Text style={styles.ddDetailLabel}>谷值净值</Text>
+                <Text style={[styles.ddDetailValue, { color: Colors.loss }]}>{ddDetail.troughNav.toFixed(4)}</Text>
+                <Text style={styles.ddDetailDate}>
+                  {snapDates[ddDetail.troughIndex]
+                    ? snapDates[ddDetail.troughIndex].toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+                    : '--'}
+                </Text>
+              </View>
+              <View style={styles.ddDetailRow}>
+                <Text style={styles.ddDetailLabel}>回撤持续</Text>
+                <Text style={styles.ddDetailValue}>
+                  {snapDates[ddDetail.peakIndex] && snapDates[ddDetail.troughIndex]
+                    ? `${Math.round((snapDates[ddDetail.troughIndex].getTime() - snapDates[ddDetail.peakIndex].getTime()) / 86400000)} 天`
+                    : '--'}
+                </Text>
+                <Text style={styles.ddDetailDate} />
+              </View>
+            </View>
+          )}
           <StatRow label="年化波动率" value={hasEnoughSnapData ? `${(vol * 100).toFixed(2)}%` : '数据不足'} />
           <StatRow label="夏普比率" value={hasEnoughSnapData ? sharpe.toFixed(4) : '数据不足'} />
         </SectionCard>
@@ -315,4 +348,33 @@ const styles = StyleSheet.create({
   trancheDot: { width: 8, height: 8, borderRadius: 4, marginRight: Spacing.sm },
   trancheLabel: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
   trancheValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  ddDetailBox: {
+    backgroundColor: Colors.background,
+    borderRadius: Radius.sm,
+    padding: Spacing.sm,
+    marginTop: 2,
+    marginBottom: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  ddDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  ddDetailLabel: {
+    width: 64,
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+  },
+  ddDetailValue: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.medium,
+    color: Colors.textPrimary,
+  },
+  ddDetailDate: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+  },
 });

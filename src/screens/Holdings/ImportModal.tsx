@@ -9,8 +9,8 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import DocumentPicker from 'react-native-document-picker';
+import RNFS from 'react-native-fs';
 import { useQuery } from '@realm/react';
 import Realm from 'realm';
 import { ThemeColors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
@@ -51,17 +51,15 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
 
   const handlePickFile = async () => {
     try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: ['text/csv', 'text/plain', 'public.comma-separated-values-text', '*/*'],
-        copyToCacheDirectory: true,
+      const results = await DocumentPicker.pick({
+        type: [DocumentPicker.types.plainText, DocumentPicker.types.allFiles],
+        copyTo: 'cachesDirectory',
       });
-
-      if (picked.canceled) return;
 
       setStep('parsing');
 
-      const fileUri = picked.assets[0].uri;
-      const content = await FileSystem.readAsStringAsync(fileUri);
+      const fileUri = results[0].fileCopyUri ?? results[0].uri;
+      const content = await RNFS.readFile(decodeURIComponent(fileUri.replace('file://', '')));
       const parsed = parseCSV(content);
 
       // 按组合持仓过滤
