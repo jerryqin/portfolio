@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  SafeAreaView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@realm/react';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';

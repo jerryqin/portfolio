@@ -5,8 +5,8 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  SafeAreaView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@realm/react';
 import { Colors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
 import { DailySnapshot, Transaction, Holding, Portfolio } from '../../database/schema';

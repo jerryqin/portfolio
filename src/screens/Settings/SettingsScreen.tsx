@@ -9,8 +9,8 @@ import {
   Alert,
   ActivityIndicator,
   Share,
+  SafeAreaView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import DocumentPicker from 'react-native-document-picker';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';

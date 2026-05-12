@@ -16,8 +16,8 @@ import {
   InteractionManager,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  SafeAreaView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useRealm } from '@realm/react';
 import { Colors, Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';

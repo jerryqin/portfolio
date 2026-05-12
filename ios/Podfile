@@ -21,7 +21,7 @@ target 'portfolio' do
     :path => config[:reactNativePath],
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/..",
-    # Disable New Architecture to avoid folly/coroutine compatibility issues
+    # RN 0.85 runs with New Architecture by default.
     :new_arch_enabled => true
   )
 
