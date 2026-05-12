@@ -10,7 +10,6 @@ import {
   Alert,
 } from 'react-native';
 import DocumentPicker from 'react-native-document-picker';
-import RNFS from 'react-native-fs';
 import { useQuery } from '@realm/react';
 import Realm from 'realm';
 import { ThemeColors, Spacing, FontSize, FontWeight, Radius } from '../../theme';
@@ -59,7 +58,7 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
       setStep('parsing');
 
       const fileUri = results[0].fileCopyUri ?? results[0].uri;
-      const content = await RNFS.readFile(decodeURIComponent(fileUri.replace('file://', '')));
+      const content = await fetch(decodeURIComponent(fileUri)).then(r => r.text());
       const parsed = parseCSV(content);
 
       // 按组合持仓过滤

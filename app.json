@@ -1,4 +1,6 @@
 {
+  "name": "portfolio",
+  "displayName": "portfolio",
   "expo": {
     "name": "portfolio",
     "slug": "portfolio",

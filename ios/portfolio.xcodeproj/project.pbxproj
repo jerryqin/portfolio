@@ -307,7 +307,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = portfolio/portfolio.entitlements;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = QR6GA3K5GC;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = portfolio/Info.plist;
@@ -323,8 +323,8 @@
 					"-lc++",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
-				PRODUCT_BUNDLE_IDENTIFIER = com.jerryqin.portfolio;
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.jerryqin.portfolio;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jerryqin.portfolio.debug;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.jerryqin.portfolio.debug;
 				PRODUCT_NAME = portfolio;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -341,7 +341,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = portfolio/portfolio.entitlements;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = QR6GA3K5GC;
 				INFOPLIST_FILE = portfolio/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;

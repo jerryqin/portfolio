@@ -11,7 +11,6 @@ import {
   Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import RNFS from 'react-native-fs';
 import DocumentPicker from 'react-native-document-picker';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';
@@ -32,9 +31,7 @@ export default function SettingsScreen() {
       const json = exportAllData();
       const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const filename = `portfolio_backup_${date}.json`;
-      const filePath = `${RNFS.CachesDirectoryPath}/${filename}`;
-      await RNFS.writeFile(filePath, json, 'utf8');
-      await Share.share({ url: `file://${filePath}` });
+      await Share.share({ message: json, title: filename });
     } catch (e: any) {
       Alert.alert('导出失败', e?.message ?? '未知错误');
     } finally {
@@ -53,7 +50,7 @@ export default function SettingsScreen() {
       setBusy(true);
 
       const fileUri = results[0].fileCopyUri ?? results[0].uri;
-      const json = await RNFS.readFile(decodeURIComponent(fileUri.replace('file://', '')));
+      const json = await fetch(decodeURIComponent(fileUri)).then(r => r.text());
       const backup = JSON.parse(json);
 
       if (!backup || backup.version !== 1 || !Array.isArray(backup.portfolios)) {
