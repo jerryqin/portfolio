@@ -17,6 +17,11 @@ import { useColors } from '../../theme/useColors';
 import { useThemeStore } from '../../store/themeStore';
 import { usePortfolioStore } from '../../store/portfolioStore';
 
+const APP_CONFIG = require('../../../app.json');
+const APP_VERSION: string = APP_CONFIG?.expo?.version ?? '0.0.0';
+const APP_BUILD: string | undefined = APP_CONFIG?.expo?.ios?.buildNumber;
+const VERSION_TEXT = APP_BUILD ? `${APP_VERSION} (${APP_BUILD})` : APP_VERSION;
+
 export default function SettingsScreen() {
   const Colors = useColors();
   const { isDark, toggleTheme } = useThemeStore();
@@ -161,7 +166,7 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>版本</Text>
-            <Text style={styles.infoValue}>0.1.1</Text>
+            <Text style={styles.infoValue}>{VERSION_TEXT}</Text>
           </View>
           <View style={[styles.infoRow, styles.noBorder]}>
             <Text style={styles.infoLabel}>数据存储</Text>

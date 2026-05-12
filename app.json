@@ -4,12 +4,12 @@
   "expo": {
     "name": "portfolio",
     "slug": "portfolio",
-    "version": "0.1.2",
+    "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.jerryqin.portfolio",
-      "buildNumber": "2",
+      "buildNumber": "5",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

@@ -277,7 +277,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     const realm = getRealm();
     const pId = new Realm.BSON.ObjectId(portfolioId);
 
-    // 只操作已有持仓，不自动创建
+    // 自动纳入 CSV 中出现的标的，保证按全标的口径回放
     const existingHoldings = realm
       .objects(Holding)
       .filtered('portfolioId == $0 AND isDisabled == false', pId);
@@ -314,7 +314,25 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
 
       // ── 写入股票交易（只写去重后的新流水，以 delta 更新持仓和现金）──
       for (const row of rows) {
-        if (!holdingMap.has(row.ticker)) continue;
+        let holding = holdingMap.get(row.ticker);
+        if (!holding) {
+          holding = realm.create(Holding, {
+            portfolioId: pId,
+            ticker: row.ticker,
+            name: row.ticker,
+            tranche: 'trading',
+            targetWeight: 0,
+            shares: 0,
+            avgCost: 0,
+            initialShares: 0,
+            initialAvgCost: 0,
+            currentPrice: row.price,
+            isDisabled: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+          holdingMap.set(row.ticker, holding);
+        }
 
         // 股息若 shares/price 均为0，将总金额编码为 price=amount, shares=1，便于后续重算
         const storedShares = (row.type === 'dividend' && row.shares === 0) ? 1 : row.shares;
@@ -323,8 +341,6 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         const key = makeKey(row.ticker, row.type, row.date, storedShares, storedPrice);
         if (importedKeys.has(key)) continue;
         importedKeys.add(key);
-
-        const holding = holdingMap.get(row.ticker)!;
 
         realm.create(Transaction, {
           portfolioId: pId,
