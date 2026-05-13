@@ -3,7 +3,7 @@ import Realm from 'realm';
 import { Alert } from 'react-native';
 import { getRealm } from '../database';
 import { Portfolio, Holding, Transaction, PortfolioSnapshot, DailySnapshot } from '../database/schema';
-import { fetchBatchQuotes } from '../services/yahooFinance';
+import { fetchBatchQuotes, fetchHistorical } from '../services/yahooFinance';
 import { calcAvgCost } from '../utils/finance';
 import type { ParsedRow, CashAdjustRow } from '../utils/csvImport';
 
@@ -48,9 +48,9 @@ interface PortfolioStore {
   activatePortfolio: (portfolioId: string) => { ok: boolean; error?: string };
 
   // 批量导入 CSV 交易流水
-  batchImportTransactions: (portfolioId: string, rows: ParsedRow[], cashRows?: CashAdjustRow[]) => {
+  batchImportTransactions: (portfolioId: string, rows: ParsedRow[], cashRows?: CashAdjustRow[]) => Promise<{
     imported: number;
-  };
+  }>;
 
   // 删除组合及其全部持仓、流水
   deletePortfolio: (portfolioId: string) => void;
@@ -235,10 +235,27 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
             (s, h) => s + h.shares * h.currentPrice,
             0,
           );
-          const cash = Math.max(portfolio.currentCapital, 0);
-          const totalAssets = totalValue + cash;
+          // 从流水从头重算现金余额，避免依赖可能有误差的 currentCapital 字段
+          const allTxs = Array.from(realm.objects(Transaction).filtered('portfolioId == $0', id));
+          let cashBalance = portfolio.initialCapital;
+          let totalDeposits = 0;
+          for (const tx of allTxs) {
+            if (tx.ticker === '__CASH__') {
+              const amount = tx.price * tx.shares;
+              cashBalance += amount;
+              totalDeposits += amount;
+            } else if (tx.type === 'buy') {
+              cashBalance -= tx.shares * tx.price;
+            } else if (tx.type === 'sell') {
+              cashBalance += tx.shares * tx.price;
+            } else if (tx.type === 'dividend') {
+              cashBalance += tx.price * tx.shares;
+            }
+          }
+          const totalCapital = Math.max(portfolio.initialCapital + totalDeposits, portfolio.initialCapital);
+          const totalAssets = totalValue + cashBalance;
           const nav =
-            portfolio.initialCapital > 0 ? totalAssets / portfolio.initialCapital : 1;
+            totalCapital > 0 ? totalAssets / totalCapital : 1;
 
           const today = new Date();
           today.setHours(0, 0, 0, 0);
@@ -273,7 +290,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     }
   },
 
-  batchImportTransactions: (portfolioId, rows, cashRows = []) => {
+  batchImportTransactions: async (portfolioId, rows, cashRows = []) => {
     const realm = getRealm();
     const pId = new Realm.BSON.ObjectId(portfolioId);
 
@@ -408,7 +425,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
       }
     });
 
-    // ── DailySnapshot：从数据库全量已导入流水重建（幂等）──
+    // ── DailySnapshot：拉取历史行情，按每个交易日实际市价重建（幂等）──
     const allImportedTxs = Array.from(
       realm.objects(Transaction)
         .filtered('portfolioId == $0 AND isImported == true', pId)
@@ -424,48 +441,101 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         byDate.get(dateStr)!.push(tx);
       }
 
-      const allDates = [...byDate.keys()].sort();
-      const simShares = new Map<string, number>();
-      const simPrice  = new Map<string, number>();
-      // 以 initialCapital 为起点做正向完整回放，彻底消除"逆推现金"的虚假回撤
-      let simCash = initialCapital;
+      const txDates = [...byDate.keys()].sort();
+      const firstTxDateStr = txDates[0];
 
-      const minDate = new Date(allDates[0]);
-      const maxDate = new Date(allDates[allDates.length - 1]);
-      maxDate.setDate(maxDate.getDate() + 1);
+      // 总投入资本（分母）
+      const totalCashDeposits = allImportedTxs
+        .filter(t => t.ticker === '__CASH__')
+        .reduce((s, t) => s + t.price * t.shares, 0);
+      const totalCapital = Math.max(initialCapital + totalCashDeposits, initialCapital);
+
+      // ── 拉取所有标的历史行情 ──
+      const uniqueTickers = [...new Set(
+        allImportedTxs.filter(t => t.ticker !== '__CASH__').map(t => t.ticker),
+      )];
+      const priceHistory = new Map<string, Map<string, number>>(); // ticker → dateStr → close
+      await Promise.allSettled(uniqueTickers.map(async ticker => {
+        try {
+          const bars = await fetchHistorical(ticker, 'max', '1d');
+          const dateMap = new Map<string, number>();
+          for (const bar of bars) {
+            if (bar.close > 0) {
+              const d = bar.date;
+              const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              dateMap.set(ds, bar.close);
+            }
+          }
+          priceHistory.set(ticker, dateMap);
+        } catch {
+          // 网络失败时跳过该标的，后续用成交价填充
+        }
+      }));
+
+      // ── 合并所有交易日（行情日历 ∪ 交易日）──
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      const tradingDatesSet = new Set<string>();
+      for (const ds of txDates) tradingDatesSet.add(ds);
+      for (const [, dateMap] of priceHistory) {
+        for (const ds of dateMap.keys()) {
+          if (ds >= firstTxDateStr && ds <= todayStr) tradingDatesSet.add(ds);
+        }
+      }
+      const allTradingDates = [...tradingDatesSet].sort();
+
+      const minDate = new Date(allTradingDates[0]);
+      const maxDate = new Date(today.getTime() + 86400000); // 明天 00:00，确保包含今天
+
+      const simShares = new Map<string, number>();
+      const simPrice  = new Map<string, number>(); // 当前已知最新市价（fill-forward）
+      let simCash = totalCapital;
 
       realm.write(() => {
+        // 删除该范围内全部旧快照（完全重建）
         const existingSnaps = realm
           .objects(DailySnapshot)
           .filtered('portfolioId == $0 AND date >= $1 AND date < $2', pId, minDate, maxDate);
         realm.delete(existingSnaps);
 
-        for (const dateStr of allDates) {
-          const dayTxs = byDate.get(dateStr)!;
+        for (const dateStr of allTradingDates) {
+          // 1. 当日交易处理
+          const dayTxs = byDate.get(dateStr) ?? [];
           for (const tx of dayTxs) {
-            if (tx.ticker === '__CASH__') {
-              simCash += tx.price * tx.shares; // 现金调整行
-              continue;
-            }
+            if (tx.ticker === '__CASH__') continue;
             if (tx.type === 'buy') {
               simShares.set(tx.ticker, (simShares.get(tx.ticker) ?? 0) + tx.shares);
-              simPrice.set(tx.ticker, tx.price);
+              // 若行情拉取失败，用成交价作为该日市价兜底
+              if (!priceHistory.get(tx.ticker)?.has(dateStr)) {
+                simPrice.set(tx.ticker, tx.price);
+              }
               simCash -= tx.price * tx.shares;
             } else if (tx.type === 'sell') {
               simShares.set(tx.ticker, Math.max(0, (simShares.get(tx.ticker) ?? 0) - tx.shares));
-              simPrice.set(tx.ticker, tx.price);
+              if (!priceHistory.get(tx.ticker)?.has(dateStr)) {
+                simPrice.set(tx.ticker, tx.price);
+              }
               simCash += tx.price * tx.shares;
             } else if (tx.type === 'dividend') {
               simCash += tx.price * tx.shares;
             }
           }
 
+          // 2. 用历史行情更新市价（fill-forward：若当日无数据则保留上一个已知价）
+          for (const ticker of uniqueTickers) {
+            const p = priceHistory.get(ticker)?.get(dateStr);
+            if (p !== undefined && p > 0) simPrice.set(ticker, p);
+          }
+
+          // 3. 估值 & 写入快照
           let totalValue = 0;
           for (const [ticker, shares] of simShares) {
             totalValue += shares * (simPrice.get(ticker) ?? 0);
           }
-          const totalAssets = totalValue + Math.max(simCash, 0);
-          const nav = initialCapital > 0 ? totalAssets / initialCapital : 1;
+          const totalAssets = totalValue + simCash;
+          const nav = totalCapital > 0 ? totalAssets / totalCapital : 1;
           const [y, mo, da] = dateStr.split('-').map(Number);
 
           realm.create(DailySnapshot, {
@@ -528,6 +598,8 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     const holdings = realm.objects(Holding).filtered('portfolioId == $0', pId);
     const dailySnaps = realm.objects(DailySnapshot).filtered('portfolioId == $0', pId);
 
+    const transactions = realm.objects(Transaction).filtered('portfolioId == $0', pId);
+
     const holdingsData = Array.from(holdings).map(h => ({
       holdingId: h._id.toHexString(),
       ticker: h.ticker,
@@ -542,6 +614,20 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
       isDisabled: h.isDisabled,
     }));
 
+    const transactionsData = Array.from(transactions).map(t => ({
+      transactionId: t._id.toHexString(),
+      holdingId: t.holdingId.toHexString(),
+      ticker: t.ticker,
+      type: t.type,
+      date: t.date.toISOString(),
+      price: t.price,
+      shares: t.shares,
+      commission: t.commission,
+      tax: t.tax,
+      notes: t.notes,
+      isImported: t.isImported,
+    }));
+
     // DailySnapshot 每天一条，通常几十~几百条，序列化开销可接受
     const dailySnapsData = Array.from(dailySnaps).map(s => ({
       date: s.date.toISOString(),
@@ -554,7 +640,6 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
       sharpeRatio: s.sharpeRatio,
     }));
 
-    // 不序列化流水（几千条会导致 JSON 过大，恢复时 parse 阻塞 JS 线程）
     const dataJson = JSON.stringify({
       portfolio: {
         name: portfolio.name,
@@ -566,6 +651,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         benchmarkIndex: portfolio.benchmarkIndex,
       },
       holdings: holdingsData,
+      transactions: transactionsData,
       dailySnaps: dailySnapsData,
     });
 
@@ -589,8 +675,61 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     const data = JSON.parse(snapshot.dataJson);
 
     realm.write(() => {
-      // 只恢复 DailySnapshot 历史净值序列，不修改当前持仓/交易/资金
+      // 1. 恢复 Portfolio 基本数据
+      const portfolio = realm.objectForPrimaryKey(Portfolio, pId);
+      if (portfolio && data.portfolio) {
+        portfolio.name = data.portfolio.name;
+        portfolio.investmentStyle = data.portfolio.investmentStyle;
+        portfolio.initialCapital = data.portfolio.initialCapital;
+        portfolio.currentCapital = data.portfolio.currentCapital;
+        portfolio.market = data.portfolio.market;
+        portfolio.currency = data.portfolio.currency;
+        portfolio.benchmarkIndex = data.portfolio.benchmarkIndex;
+        portfolio.updatedAt = new Date();
+      }
+
+      // 2. 删除现有 Holdings / Transactions / DailySnapshots
+      realm.delete(realm.objects(Transaction).filtered('portfolioId == $0', pId));
+      realm.delete(realm.objects(Holding).filtered('portfolioId == $0', pId));
       realm.delete(realm.objects(DailySnapshot).filtered('portfolioId == $0', pId));
+
+      // 3. 重建 Holdings（保留原 _id，以便 Transaction 的 holdingId 引用正确）
+      for (const h of (data.holdings ?? [])) {
+        realm.create(Holding, {
+          _id: new Realm.BSON.ObjectId(h.holdingId),
+          portfolioId: pId,
+          ticker: h.ticker,
+          name: h.name,
+          tranche: h.tranche,
+          targetWeight: h.targetWeight,
+          shares: h.shares,
+          avgCost: h.avgCost,
+          initialShares: h.initialShares,
+          initialAvgCost: h.initialAvgCost,
+          currentPrice: h.currentPrice,
+          isDisabled: h.isDisabled,
+        });
+      }
+
+      // 4. 重建 Transactions
+      for (const t of (data.transactions ?? [])) {
+        realm.create(Transaction, {
+          _id: new Realm.BSON.ObjectId(t.transactionId),
+          portfolioId: pId,
+          holdingId: new Realm.BSON.ObjectId(t.holdingId),
+          ticker: t.ticker,
+          type: t.type,
+          date: new Date(t.date),
+          price: t.price,
+          shares: t.shares,
+          commission: t.commission,
+          tax: t.tax,
+          notes: t.notes,
+          isImported: t.isImported,
+        });
+      }
+
+      // 5. 重建 DailySnapshots
       for (const s of (data.dailySnaps ?? [])) {
         realm.create(DailySnapshot, {
           portfolioId: pId,

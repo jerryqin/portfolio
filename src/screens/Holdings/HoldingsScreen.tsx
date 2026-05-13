@@ -267,6 +267,7 @@ export default function HoldingsScreen() {
   };
 
   const handleDeleteHolding = (holding: Holding) => {
+    if (!holding.isValid()) return;
     Alert.alert(
       '删除持仓',
       `确认删除「${holding.ticker}${holding.name ? ' ' + holding.name : ''}」？将同时删除该标的全部交易流水，不可恢复。`,
@@ -336,6 +337,9 @@ export default function HoldingsScreen() {
   const styles = makeStyles(Colors);
 
   const renderHolding = ({ item }: { item: Holding }) => {
+    // Realm 对象删除后，React 可能用旧 data 再渲染一帧，需在此处拦截
+    if (!item.isValid()) return null;
+
     const marketValue = item.shares * item.currentPrice;
     const cost = item.shares * item.avgCost;
     const pnl = marketValue - cost;
@@ -669,7 +673,7 @@ export default function HoldingsScreen() {
       </Modal>
 
       {/* 交易记录 Modal */}
-      {selectedHolding && (
+      {txModal && selectedHolding && (
         <TxModal
           visible={txModal}
           holding={selectedHolding}
@@ -678,7 +682,7 @@ export default function HoldingsScreen() {
           txForm={txForm}
           txTypes={TX_TYPES}
           onOpenForm={() => setShowTxForm(true)}
-          onClose={() => { setTxModal(false); setShowTxForm(false); }}
+          onClose={() => { setTxModal(false); setShowTxForm(false); setSelectedHolding(null); }}
           onChangeTxForm={(patch) => setTxForm(f => ({ ...f, ...patch }))}
           onSubmitTx={handleAddTx}
         />

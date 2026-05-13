@@ -73,11 +73,11 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
     }
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!summary) return;
     setStep('importing');
     try {
-      const { imported } = batchImportTransactions(portfolioId, summary.matchedRows, summary.cashRows);
+      const { imported } = await batchImportTransactions(portfolioId, summary.matchedRows, summary.cashRows);
       const cashAdj = summary.cashRows.length > 0 ? `\n另含 ${summary.cashRows.length} 条现金调整（期权/利息）` : '';
       Alert.alert(
         '导入成功',
@@ -203,7 +203,7 @@ export default function ImportModal({ visible, portfolioId, onClose, onImported 
         {step === 'importing' && (
           <View style={styles.idleArea}>
             <ActivityIndicator size="large" color={Colors.primary} />
-            <Text style={styles.hint}>正在写入数据库…</Text>
+            <Text style={styles.hint}>正在写入交易记录并拉取历史行情…{'\n'}可能需要数秒，请稍候</Text>
           </View>
         )}
       </View>
