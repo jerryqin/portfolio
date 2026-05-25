@@ -12,6 +12,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import DocumentPicker from 'react-native-document-picker';
+import RNFS from 'react-native-fs';
 import { Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../../theme';
 import { useColors } from '../../theme/useColors';
 import { useThemeStore } from '../../store/themeStore';
@@ -36,7 +37,9 @@ export default function SettingsScreen() {
       const json = exportAllData();
       const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const filename = `portfolio_backup_${date}.json`;
-      await Share.share({ message: json, title: filename });
+      const filePath = `${RNFS.TemporaryDirectoryPath}${filename}`;
+      await RNFS.writeFile(filePath, json, 'utf8');
+      await Share.share({ url: `file://${filePath}`, title: filename });
     } catch (e: any) {
       Alert.alert('导出失败', e?.message ?? '未知错误');
     } finally {
