@@ -26,7 +26,7 @@ const VERSION_TEXT = APP_BUILD ? `${APP_VERSION} (${APP_BUILD})` : APP_VERSION;
 export default function SettingsScreen() {
   const Colors = useColors();
   const { isDark, toggleTheme } = useThemeStore();
-  const { exportAllData, importAllData, setActivePortfolioId } = usePortfolioStore();
+  const { exportAllData, importAllData, setActivePortfolioId, activePortfolioId, clearNavHistory } = usePortfolioStore();
   const styles = makeStyles(Colors);
   const [busy, setBusy] = useState(false);
 
@@ -161,6 +161,37 @@ export default function SettingsScreen() {
             ) : (
               <Text style={styles.rowChevron}>›</Text>
             )}
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity
+            style={styles.row}
+            disabled={busy || !activePortfolioId}
+            onPress={() => {
+              if (!activePortfolioId) return;
+              Alert.alert(
+                '重置净值历史',
+                '将删除当前组合的全部日度快照，最大回撤、夏普指标将显示为"——"。刷新行情后数据会重新积累。',
+                [
+                  { text: '取消', style: 'cancel' },
+                  {
+                    text: '确认重置',
+                    style: 'destructive',
+                    onPress: () => {
+                      clearNavHistory(activePortfolioId);
+                      Alert.alert('已重置', '净值历史已清除，刷新行情后将从今日重新积累。');
+                    },
+                  },
+                ],
+              );
+            }}>
+            <View style={styles.rowLeft}>
+              <Text style={styles.rowIcon}>🔄</Text>
+              <View>
+                <Text style={[styles.rowLabel, { color: Colors.loss }]}>重置净值历史</Text>
+                <Text style={styles.rowSub}>清除当前组合的回撤/夏普历史数据</Text>
+              </View>
+            </View>
+            <Text style={styles.rowChevron}>›</Text>
           </TouchableOpacity>
         </View>
 

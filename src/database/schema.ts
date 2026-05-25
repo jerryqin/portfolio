@@ -14,6 +14,8 @@ export class Portfolio extends Realm.Object<Portfolio> {
   isArchived!: boolean;
   isDraft!: boolean;            // 草稿模式，未激活
   updatedAt!: Date;
+  portfolioState!: string;      // 'observing' | 'balanced' | 'attacking'
+  stateConfigJson!: string;     // 用户可配置的状态参数（JSON）
 
   static schema: Realm.ObjectSchema = {
     name: 'Portfolio',
@@ -31,6 +33,8 @@ export class Portfolio extends Realm.Object<Portfolio> {
       isArchived: { type: 'bool', default: false },
       isDraft: { type: 'bool', default: true },
       updatedAt: { type: 'date', default: () => new Date() },
+      portfolioState: { type: 'string', default: 'observing' },
+      stateConfigJson: { type: 'string', default: '{}' },
     },
   };
 }
@@ -50,6 +54,7 @@ export class Holding extends Realm.Object<Holding> {
   currentPrice!: number;        // 最新价格
   priceUpdatedAt!: Date | null;
   isDisabled!: boolean;         // 临时禁用（保留数据不参与统计）
+  signal!: string;              // 'none'|'breakout'|'pullbackHold'|'spikeReversal'|'breakdown'
 
   static schema: Realm.ObjectSchema = {
     name: 'Holding',
@@ -68,6 +73,7 @@ export class Holding extends Realm.Object<Holding> {
       currentPrice: { type: 'double', default: 0 },
       priceUpdatedAt: 'date?',
       isDisabled: { type: 'bool', default: false },
+      signal: { type: 'string', default: 'none' },
     },
   };
 }
@@ -201,4 +207,4 @@ export const RealmSchema = [
   PortfolioSnapshot,
 ];
 
-export const REALM_SCHEMA_VERSION = 3;
+export const REALM_SCHEMA_VERSION = 4;

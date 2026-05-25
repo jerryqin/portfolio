@@ -23,6 +23,13 @@ import { Colors, Spacing, FontSize, FontWeight, Radius, ThemeColors } from '../.
 import { useColors } from '../../theme/useColors';
 import { Holding, Portfolio, PortfolioSnapshot, Transaction } from '../../database/schema';
 import { usePortfolioStore } from '../../store/portfolioStore';
+import {
+  generateHoldingAdvice,
+  parseStateConfig,
+  SIGNAL_LABELS,
+  SIGNAL_COLORS,
+  StateType,
+} from '../../utils/portfolioState';
 import ImportModal from './ImportModal';
 
 type Tranche = 'core' | 'satellite' | 'trading';
@@ -48,6 +55,7 @@ export default function HoldingsScreen() {
     addHolding, addTransaction, refreshPrices, isPriceLoading, deleteHolding,
     activatePortfolio, createPortfolio, deletePortfolio,
     saveSnapshot, restoreSnapshot, deleteSnapshot,
+    updateHoldingSignal,
   } = usePortfolioStore();
 
   // ── 仓位分层 ──
@@ -389,6 +397,48 @@ export default function HoldingsScreen() {
             </Text>
           )}
         </View>
+
+        {/* 信号选择器 */}
+        <View style={styles.signalRow}>
+          {(['none', 'breakout', 'pullbackHold', 'spikeReversal', 'breakdown'] as const).map(sig => {
+            const active = item.signal === sig;
+            const col = SIGNAL_COLORS[sig];
+            return (
+              <TouchableOpacity
+                key={sig}
+                style={[styles.signalChip, { borderColor: col }, active && { backgroundColor: col }]}
+                onPress={() => updateHoldingSignal(item._id.toHexString(), active ? 'none' : sig)}>
+                <Text style={[styles.signalChipText, { color: active ? '#fff' : col }]}>
+                  {SIGNAL_LABELS[sig]}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* 操作建议 */}
+        {item.signal !== 'none' && (() => {
+          const advice = generateHoldingAdvice({
+            signal: item.signal as any,
+            currentWeightPct: actualWeight,
+            positionRatioPct: totalAssets > 0 ? (totalMarketValue / totalAssets) * 100 : 0,
+            portfolioState: (activePortfolioObj?.portfolioState ?? 'observing') as StateType,
+            config: parseStateConfig(activePortfolioObj?.stateConfigJson ?? '{}'),
+          });
+          if (!advice) return null;
+          const col = SIGNAL_COLORS[item.signal as keyof typeof SIGNAL_COLORS];
+          return (
+            <View style={[styles.adviceCard, { borderLeftColor: col }]}>
+              <Text style={[styles.adviceAction, { color: col }]}>{advice.label}</Text>
+              <Text style={styles.adviceDetail}>
+                {advice.newWeightMin !== undefined
+                  ? `目标仓位 ${advice.newWeightMin.toFixed(0)}–${advice.newWeightMax!.toFixed(0)}%`
+                  : `调整 ${advice.changeMin.toFixed(0)}–${advice.changeMax.toFixed(0)}%`}
+              </Text>
+              <Text style={styles.adviceReason}>{advice.reason}</Text>
+            </View>
+          );
+        })()}
       </TouchableOpacity>
     );
   };
@@ -1025,6 +1075,29 @@ function makeStyles(C: ThemeColors) { return StyleSheet.create({
   priceRow: { flexDirection: 'row', alignItems: 'center', marginTop: Spacing.xs, gap: Spacing.sm },
   currentPrice: { fontSize: FontSize.xs, color: C.textSecondary },
   priceTime: { fontSize: FontSize.xs, color: C.textTertiary },
+  // 信号选择器 & 操作建议
+  signalRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: Spacing.sm,
+    flexWrap: 'wrap',
+  },
+  signalChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  signalChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium },
+  adviceCard: {
+    marginTop: Spacing.sm,
+    paddingLeft: Spacing.sm,
+    borderLeftWidth: 3,
+    gap: 2,
+  },
+  adviceAction: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  adviceDetail: { fontSize: FontSize.xs, color: C.textSecondary },
+  adviceReason: { fontSize: FontSize.xs, color: C.textTertiary },
   empty: { alignItems: 'center', paddingTop: Spacing.xxl },
   emptyText: { color: C.textTertiary, fontSize: FontSize.md },
 

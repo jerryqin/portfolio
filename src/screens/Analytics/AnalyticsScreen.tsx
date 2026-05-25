@@ -15,6 +15,14 @@ import { useColors } from '../../theme/useColors';
 import { Portfolio, Holding, DailySnapshot, Transaction } from '../../database/schema';
 import { usePortfolioStore } from '../../store/portfolioStore';
 import {
+  assessPortfolioState,
+  parseStateConfig,
+  STATE_LABELS,
+  STATE_COLORS,
+  StateAssessment,
+  StateType,
+} from '../../utils/portfolioState';
+import {
   calcMaxDrawdown,
   calcVolatility,
   calcSharpe,
@@ -47,7 +55,7 @@ function periodStartDate(period: Period): Date {
 export default function AnalyticsScreen() {
   const Colors = useColors();
   const [activePeriod, setActivePeriod] = useState<Period>('ALL');
-  const { activePortfolioId, refreshPrices, isPriceLoading } = usePortfolioStore();
+  const { activePortfolioId, refreshPrices, isPriceLoading, updatePortfolioState } = usePortfolioStore();
 
   // ── 数据查询 ──
   const portfolios = useQuery(Portfolio).filtered('isArchived == false');
@@ -88,8 +96,19 @@ export default function AnalyticsScreen() {
   const totalAssets = totalValue + cash;
   const unrealizedPnl = totalValue - totalCost;
   const unrealizedPct = totalCost > 0 ? (unrealizedPnl / totalCost) * 100 : 0;
-  const navPerUnit = (activePortfolio?.initialCapital ?? 0) > 0
-    ? totalAssets / activePortfolio!.initialCapital : 1;
+
+  // 与 refreshPrices / DailySnapshot 保持一致：分母 = initialCapital + 追加投入
+  const totalDeposits = useMemo(
+    () => Array.from(transactions)
+      .filter(t => t.ticker === '__CASH__')
+      .reduce((s, t) => s + t.price * t.shares, 0),
+    [transactions],
+  );
+  const totalCapital = Math.max(
+    (activePortfolio?.initialCapital ?? 0) + totalDeposits,
+    activePortfolio?.initialCapital ?? 0,
+  );
+  const navPerUnit = totalCapital > 0 ? totalAssets / totalCapital : 1;
 
   // ── 周期内业绩指标 ──
   const navSeries  = snapshots.map(s => s.navPerUnit);
@@ -165,6 +184,19 @@ export default function AnalyticsScreen() {
     { key: 'trading',   label: '交易仓', color: Colors.tradingColor },
   ];
 
+  // ── 组合状态评估 ──
+  const portfolioStateType = (activePortfolio?.portfolioState ?? 'observing') as StateType;
+  const stateConfig = parseStateConfig(activePortfolio?.stateConfigJson ?? '{}');
+  const allSnapshotNavs = Array.from(allSnapshots).map(s => s.navPerUnit);
+  const positionRatioPct = totalAssets > 0 ? (totalValue / totalAssets) * 100 : 0;
+  const stateAssessment = assessPortfolioState({
+    currentState: portfolioStateType,
+    snapshotNavs: allSnapshotNavs,
+    currentNavPerUnit: navPerUnit,
+    positionRatioPct,
+    config: stateConfig,
+  });
+
   const styles = makeStyles(Colors);
 
   if (!activePortfolio) {
@@ -206,6 +238,14 @@ export default function AnalyticsScreen() {
             )}
           </TouchableOpacity>
         </View>
+
+        {/* 组合状态卡片 */}
+        <PortfolioStateCard
+          Colors={Colors}
+          assessment={stateAssessment}
+          onStateChange={state => activePortfolio &&
+            updatePortfolioState(activePortfolio._id.toHexString(), state)}
+        />
 
         {/* 资产总览大卡片 */}
         <View style={styles.assetCard}>
@@ -365,6 +405,70 @@ function StatRow({ Colors, label, value, positive, negative }: {
   );
 }
 
+function PortfolioStateCard({ Colors, assessment, onStateChange }: {
+  Colors: ThemeColors;
+  assessment: StateAssessment;
+  onStateChange: (state: string) => void;
+}) {
+  const styles = makeStyles(Colors);
+  const stateColor = STATE_COLORS[assessment.currentState];
+  const states: StateType[] = ['observing', 'balanced', 'attacking'];
+  return (
+    <View style={styles.stateCard}>
+      {/* 顶行：当前状态徽章 + 仓位 % */}
+      <View style={styles.stateTopRow}>
+        <View style={[styles.stateBadge, { backgroundColor: stateColor + '22', borderColor: stateColor }]}>
+          <Text style={[styles.stateBadgeText, { color: stateColor }]}>
+            {STATE_LABELS[assessment.currentState]}
+          </Text>
+        </View>
+        <Text style={styles.stateMetaText}>
+          仓位 {assessment.positionRatioPct.toFixed(1)}%
+          {'  '}回撤 {assessment.currentDrawdownPct.toFixed(1)}%
+        </Text>
+        {assessment.upDays > 0 && (
+          <Text style={[styles.stateMetaText, { color: Colors.profit }]}>
+            ↑{assessment.upDays}天
+          </Text>
+        )}
+        {assessment.downDays > 0 && (
+          <Text style={[styles.stateMetaText, { color: Colors.loss }]}>
+            ↓{assessment.downDays}天
+          </Text>
+        )}
+      </View>
+
+      {/* 建议文字 */}
+      {assessment.suggestion ? (
+        <Text style={styles.stateSuggestion}>{assessment.suggestion}</Text>
+      ) : null}
+
+      {/* 阻碍条件 */}
+      {assessment.blockers.length > 0 && (
+        <Text style={styles.stateBlocker}>⚠ {assessment.blockers.join('；')}</Text>
+      )}
+
+      {/* 手动切换状态 */}
+      <View style={styles.statePillRow}>
+        {states.map(s => {
+          const active = assessment.currentState === s;
+          const c = STATE_COLORS[s];
+          return (
+            <TouchableOpacity
+              key={s}
+              style={[styles.statePill, { borderColor: c }, active && { backgroundColor: c }]}
+              onPress={() => !active && onStateChange(s)}>
+              <Text style={[styles.statePillText, { color: active ? '#fff' : c }]}>
+                {STATE_LABELS[s]}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 // ─── 样式工厂 ───────────────────────────────────────────────
 
 function makeStyles(C: ThemeColors) {
@@ -489,5 +593,54 @@ function makeStyles(C: ThemeColors) {
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     emptyText: { fontSize: FontSize.xl, color: C.textPrimary, marginBottom: Spacing.sm },
     emptySubText: { fontSize: FontSize.md, color: C.textTertiary, textAlign: 'center' },
+    // ── 组合状态卡片 ─────────────────────────────────────────
+    stateCard: {
+      backgroundColor: C.surface,
+      borderRadius: Radius.lg,
+      padding: Spacing.md,
+      marginBottom: Spacing.md,
+      borderWidth: 1,
+      borderColor: C.border,
+    },
+    stateTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      marginBottom: Spacing.xs,
+      flexWrap: 'wrap',
+    },
+    stateBadge: {
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 2,
+      borderRadius: Radius.sm,
+      borderWidth: 1,
+    },
+    stateBadgeText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+    stateMetaText: { fontSize: FontSize.sm, color: C.textTertiary },
+    stateSuggestion: {
+      fontSize: FontSize.sm,
+      color: C.textSecondary,
+      marginTop: Spacing.xs,
+      marginBottom: Spacing.xs,
+      lineHeight: 18,
+    },
+    stateBlocker: {
+      fontSize: FontSize.xs,
+      color: C.textTertiary,
+      marginBottom: Spacing.xs,
+    },
+    statePillRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      marginTop: Spacing.xs,
+    },
+    statePill: {
+      flex: 1,
+      alignItems: 'center',
+      paddingVertical: Spacing.xs,
+      borderRadius: Radius.sm,
+      borderWidth: 1,
+    },
+    statePillText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium },
   });
 }

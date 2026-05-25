@@ -24,6 +24,8 @@ export function getRealm(): Realm {
           }
         }
         // v2 → v3: 新增 PortfolioSnapshot 表，无需迁移已有数据
+        // v3 → v4: Portfolio 新增 portfolioState/stateConfigJson，Holding 新增 signal
+        //          所有新字段均有默认值，Realm 自动处理，无需手动迁移
       },
       // \u672c\u5730\u52a0\u5bc6 key \u540e\u7eed\u63a5\u5165 iOS Keychain
       // encryptionKey: getEncryptionKey(),

@@ -66,6 +66,11 @@ interface PortfolioStore {
   // 全量备份 / 恢复
   exportAllData: () => string;
   importAllData: (jsonStr: string) => void;
+
+  // 组合状态系统
+  updatePortfolioState: (portfolioId: string, state: string) => void;
+  updateHoldingSignal: (holdingId: string, signal: string) => void;
+  clearNavHistory: (portfolioId: string) => void;
 }
 
 export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
@@ -507,7 +512,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
 
       const simShares = new Map<string, number>();
       const simPrice  = new Map<string, number>(); // 当前已知最新市价（fill-forward）
-      let simCash = totalCapital;
+      let simCash = initialCapital;      // 从初始资本出发，逐笔处理追加/赎回
 
       realm.write(() => {
         // 删除该范围内全部旧快照（完全重建）
@@ -520,7 +525,11 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
           // 1. 当日交易处理
           const dayTxs = byDate.get(dateStr) ?? [];
           for (const tx of dayTxs) {
-            if (tx.ticker === '__CASH__') continue;
+            if (tx.ticker === '__CASH__') {
+              // 追加/赎回资金：实际改变现金，分母 totalCapital 已包含，无需修改
+              simCash += tx.price * tx.shares;
+              continue;
+            }
             if (tx.type === 'buy') {
               simShares.set(tx.ticker, (simShares.get(tx.ticker) ?? 0) + tx.shares);
               // 若行情拉取失败，用成交价作为该日市价兜底
@@ -796,6 +805,8 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
         isArchived: p.isArchived,
         isDraft: p.isDraft,
         updatedAt: p.updatedAt.toISOString(),
+        portfolioState: p.portfolioState,
+        stateConfigJson: p.stateConfigJson,
         holdings: holdings.map(h => ({
           _id: h._id.toHexString(),
           ticker: h.ticker,
@@ -809,6 +820,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
           currentPrice: h.currentPrice,
           priceUpdatedAt: h.priceUpdatedAt?.toISOString() ?? null,
           isDisabled: h.isDisabled,
+          signal: h.signal ?? 'none',
         })),
         transactions: transactions.map(t => ({
           _id: t._id.toHexString(),
@@ -878,6 +890,8 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
           isArchived: p.isArchived ?? false,
           isDraft: p.isDraft ?? false,
           updatedAt: new Date(p.updatedAt),
+          portfolioState: p.portfolioState ?? 'observing',
+          stateConfigJson: p.stateConfigJson ?? '{}',
         });
 
         for (const h of (p.holdings ?? [])) {
@@ -895,6 +909,7 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
             currentPrice: h.currentPrice ?? 0,
             priceUpdatedAt: h.priceUpdatedAt ? new Date(h.priceUpdatedAt) : null,
             isDisabled: h.isDisabled ?? false,
+            signal: h.signal ?? 'none',
           });
         }
 
@@ -940,6 +955,38 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
           });
         }
       }
+    });
+  },
+
+  updatePortfolioState: (portfolioId, state) => {
+    const realm = getRealm();
+    const id = new Realm.BSON.ObjectId(portfolioId);
+    realm.write(() => {
+      const portfolio = realm.objectForPrimaryKey(Portfolio, id);
+      if (portfolio) {
+        portfolio.portfolioState = state;
+        portfolio.updatedAt = new Date();
+      }
+    });
+  },
+
+  updateHoldingSignal: (holdingId, signal) => {
+    const realm = getRealm();
+    const id = new Realm.BSON.ObjectId(holdingId);
+    realm.write(() => {
+      const holding = realm.objectForPrimaryKey(Holding, id);
+      if (holding) {
+        holding.signal = signal;
+      }
+    });
+  },
+
+  clearNavHistory: (portfolioId) => {
+    const realm = getRealm();
+    const id = new Realm.BSON.ObjectId(portfolioId);
+    realm.write(() => {
+      const snaps = realm.objects(DailySnapshot).filtered('portfolioId == $0', id);
+      realm.delete(snaps);
     });
   },
 }));
