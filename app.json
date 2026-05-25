@@ -1,15 +1,15 @@
 {
   "name": "portfolio",
-  "displayName": "portfolio",
+  "displayName": "PortfolioX",
   "expo": {
     "name": "portfolio",
     "slug": "portfolio",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.jerryqin.portfolio",
-      "buildNumber": "5",
+      "buildNumber": "2",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

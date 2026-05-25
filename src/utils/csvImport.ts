@@ -56,8 +56,14 @@ function parseNumber(s: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-/** "2026/5/6" → Date */
+/** "2026/5/6" 或 "2026-05-06" → Date */
 function parseDate(s: string): Date {
+  // ISO format: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s.trim())) {
+    const [y, m, d] = s.trim().split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  // Slash format: YYYY/M/D
   const parts = s.split('/');
   if (parts.length !== 3) return new Date();
   const [y, m, d] = parts.map(Number);
@@ -69,6 +75,11 @@ function isOptionTicker(ticker: string): boolean {
   return /\d/.test(ticker);
 }
 
+/** 判断 Description 是否为期权描述（PUT / CALL） */
+function isOptionDescription(desc: string): boolean {
+  return /^\s*(PUT|CALL)\s+/i.test(desc);
+}
+
 const TYPE_MAP: Record<string, ImportTxType | null> = {
   买进: 'buy',
   卖出: 'sell',
@@ -76,20 +87,116 @@ const TYPE_MAP: Record<string, ImportTxType | null> = {
   利息收入: null, // 跳过
 };
 
+/** 解析英文券商 CSV（Fidelity 格式：Symbol/Quantity/Price/Action/Description/TradeDate/...） */
+function parseEnglishCSV(lines: string[], headerIndex: number): ImportSummary {
+  const header = parseCSVLine(lines[headerIndex]);
+  const COL = {
+    symbol:      header.indexOf('Symbol'),
+    quantity:    header.indexOf('Quantity'),
+    price:       header.indexOf('Price'),
+    action:      header.indexOf('Action'),
+    description: header.indexOf('Description'),
+    tradeDate:   header.indexOf('TradeDate'),
+    amount:      header.indexOf('Amount'),
+    recordType:  header.indexOf('RecordType'),
+  };
+
+  const rows: ParsedRow[] = [];
+  const cashRows: CashAdjustRow[] = [];
+  let skipped = 0;
+
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const fields = parseCSVLine(lines[i]);
+    if (fields.length < 5) { skipped++; continue; }
+
+    const rawSymbol = (fields[COL.symbol] ?? '').trim().toUpperCase();
+    const rawAction = (fields[COL.action] ?? '').trim().toUpperCase();
+    const rawDesc   = (fields[COL.description] ?? '').trim();
+    const rawDate   = (fields[COL.tradeDate] ?? '').trim();
+    const amount    = parseNumber(fields[COL.amount] ?? '0');
+    const recordType = (fields[COL.recordType] ?? '').trim().toLowerCase();
+
+    // 完全空行
+    if (!rawSymbol && amount === 0) { skipped++; continue; }
+
+    // Financial rows (interest, dividends credited as cash, etc.)
+    if (recordType === 'financial' || rawAction === 'INTEREST' || rawAction === 'DIVIDEND') {
+      if (amount !== 0) {
+        cashRows.push({ date: parseDate(rawDate), amount, notes: `${rawAction} ${rawSymbol} ${rawDesc}`.trim() });
+      } else {
+        skipped++;
+      }
+      continue;
+    }
+
+    // 期权行：symbol 为空且 description 以 PUT/CALL 开头，或 symbol 含数字
+    if (isOptionDescription(rawDesc) || (rawSymbol && isOptionTicker(rawSymbol))) {
+      if (amount !== 0) {
+        cashRows.push({ date: parseDate(rawDate), amount, notes: `期权 ${rawSymbol || rawDesc.slice(0, 40)} ${rawAction}`.trim() });
+      }
+      continue;
+    }
+
+    if (!rawSymbol) { skipped++; continue; }
+
+    const txType: ImportTxType | null =
+      rawAction === 'BUY' ? 'buy' :
+      rawAction === 'SELL' ? 'sell' :
+      null;
+
+    if (txType === null) {
+      if (amount !== 0) {
+        cashRows.push({ date: parseDate(rawDate), amount, notes: `${rawAction} ${rawSymbol} ${rawDesc}`.trim() });
+      } else {
+        skipped++;
+      }
+      continue;
+    }
+
+    const sharesRaw = parseNumber(fields[COL.quantity] ?? '0');
+    const shares = Math.abs(sharesRaw);
+    const price  = parseNumber(fields[COL.price] ?? '0');
+
+    if (shares === 0) { skipped++; continue; }
+
+    rows.push({
+      date: parseDate(rawDate),
+      type: txType,
+      ticker: rawSymbol,
+      shares,
+      price,
+      amount,
+      notes: rawDesc,
+    });
+  }
+
+  rows.sort((a, b) => a.date.getTime() - b.date.getTime());
+  const tickers = [...new Set(rows.map(r => r.ticker))];
+  return { rows, tickers, skipped, cashRows };
+}
+
 /**
  * 解析 CSV 文本，返回有效交易行及汇总
  */
 export function parseCSV(text: string): ImportSummary {
+  const empty: ImportSummary = { rows: [], tickers: [], skipped: 0, cashRows: [] };
+
   const lines = text
     .split('\n')
     .map(l => l.replace(/\r/g, '').trim())
     .filter(Boolean);
 
-  if (lines.length < 2) return { rows: [], tickers: [], skipped: 0 };
+  if (lines.length < 2) return empty;
 
-  // 找表头行（首行或第一行含"日期"的行）
+  // 英文格式检测（含 Symbol 和 Action 列）
+  const enHeaderIndex = lines.findIndex(l => /\bSymbol\b/.test(l) && /\bAction\b/.test(l));
+  if (enHeaderIndex !== -1) {
+    return parseEnglishCSV(lines, enHeaderIndex);
+  }
+
+  // 中文格式：找含"日期"的表头行
   const headerIndex = lines.findIndex(l => l.includes('日期'));
-  if (headerIndex === -1) return { rows: [], tickers: [], skipped: 0 };
+  if (headerIndex === -1) return empty;
 
   const header = parseCSVLine(lines[headerIndex]);
   const COL = {

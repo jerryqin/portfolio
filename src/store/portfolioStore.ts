@@ -375,10 +375,18 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
 
         // 持仓 delta（仅对本次新写入的流水）
         if (row.type === 'buy') {
-          holding.avgCost = calcAvgCost(holding.shares, holding.avgCost, row.shares, row.price);
+          if (holding.shares >= 0) {
+            // 正常加仓：更新均价
+            holding.avgCost = calcAvgCost(holding.shares, holding.avgCost, row.shares, row.price);
+          } else {
+            // 从超卖/负仓买回：只对净多头部分计算成本
+            const netLong = holding.shares + row.shares;
+            holding.avgCost = netLong > 0 ? row.price : 0;
+          }
           holding.shares += row.shares;
         } else if (row.type === 'sell') {
-          holding.shares = Math.max(0, holding.shares - row.shares);
+          // 允许负数：保留超出账面的卖出，便于回放完整历史
+          holding.shares -= row.shares;
         }
 
         // 现金 delta（仅对本次新写入的流水）
@@ -388,6 +396,14 @@ export const usePortfolioStore = create<PortfolioStore>((set, get) => ({
 
         holding.updatedAt = new Date();
         imported++;
+      }
+
+      // 负数持仓截断（导入窗口不含完整历史时，超卖的头寸最终归零）
+      for (const h of holdingMap.values()) {
+        if (h.shares < 0) {
+          h.shares = 0;
+          h.avgCost = 0;
+        }
       }
 
       // ── 写入现金调整行（存为 __CASH__ dividend，天然去重，彻底防止重复叠加）──
