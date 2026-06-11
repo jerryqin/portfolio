@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,7 +20,6 @@ import {
   STATE_LABELS,
   STATE_COLORS,
   StateAssessment,
-  StateType,
 } from '../../utils/portfolioState';
 import {
   calcMaxDrawdown,
@@ -55,7 +54,7 @@ function periodStartDate(period: Period): Date {
 export default function AnalyticsScreen() {
   const Colors = useColors();
   const [activePeriod, setActivePeriod] = useState<Period>('ALL');
-  const { activePortfolioId, refreshPrices, isPriceLoading, updatePortfolioState } = usePortfolioStore();
+  const { activePortfolioId, refreshPrices, isPriceLoading, updatePortfolioState, setActivePortfolioId } = usePortfolioStore();
 
   // ── 数据查询 ──
   const portfolios = useQuery(Portfolio).filtered('isArchived == false');
@@ -184,18 +183,27 @@ export default function AnalyticsScreen() {
     { key: 'trading',   label: '交易仓', color: Colors.tradingColor },
   ];
 
-  // ── 组合状态评估 ──
-  const portfolioStateType = (activePortfolio?.portfolioState ?? 'observing') as StateType;
+  // ── 组合状态评估（完全由指标决定）──
   const stateConfig = parseStateConfig(activePortfolio?.stateConfigJson ?? '{}');
   const allSnapshotNavs = Array.from(allSnapshots).map(s => s.navPerUnit);
   const positionRatioPct = totalAssets > 0 ? (totalValue / totalAssets) * 100 : 0;
   const stateAssessment = assessPortfolioState({
-    currentState: portfolioStateType,
     snapshotNavs: allSnapshotNavs,
     currentNavPerUnit: navPerUnit,
     positionRatioPct,
     config: stateConfig,
   });
+
+  // 自动将建议状态同步到 DB，供持仓页等其他地方使用
+  useEffect(() => {
+    if (
+      activePortfolio &&
+      stateAssessment.recommendedState !== (activePortfolio.portfolioState ?? 'observing')
+    ) {
+      updatePortfolioState(activePortfolio._id.toHexString(), stateAssessment.recommendedState);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateAssessment.recommendedState, activePortfolio?._id.toHexString()]);
 
   const styles = makeStyles(Colors);
 
@@ -221,6 +229,28 @@ export default function AnalyticsScreen() {
           />
         }
         contentContainerStyle={styles.content}>
+        {/* 组合切换（多组合时显示） */}
+        {portfolios.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.portfolioTabsRow}>
+            {Array.from(portfolios).map(p => {
+              const isActive = p._id.toHexString() === activePortfolio._id.toHexString();
+              return (
+                <TouchableOpacity
+                  key={p._id.toHexString()}
+                  style={[styles.portfolioTab, isActive && styles.portfolioTabActive]}
+                  onPress={() => setActivePortfolioId(p._id.toHexString())}>
+                  <Text style={[styles.portfolioTabText, isActive && styles.portfolioTabTextActive]}>
+                    {p.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+
         {/* 顶部：组合名 + 刷新 */}
         <View style={styles.header}>
           <View>
@@ -243,8 +273,6 @@ export default function AnalyticsScreen() {
         <PortfolioStateCard
           Colors={Colors}
           assessment={stateAssessment}
-          onStateChange={state => activePortfolio &&
-            updatePortfolioState(activePortfolio._id.toHexString(), state)}
         />
 
         {/* 资产总览大卡片 */}
@@ -405,66 +433,60 @@ function StatRow({ Colors, label, value, positive, negative }: {
   );
 }
 
-function PortfolioStateCard({ Colors, assessment, onStateChange }: {
+function PortfolioStateCard({ Colors, assessment }: {
   Colors: ThemeColors;
   assessment: StateAssessment;
-  onStateChange: (state: string) => void;
 }) {
   const styles = makeStyles(Colors);
-  const stateColor = STATE_COLORS[assessment.currentState];
-  const states: StateType[] = ['observing', 'balanced', 'attacking'];
+  const curColor = STATE_COLORS[assessment.currentState];
+  const recColor = STATE_COLORS[assessment.recommendedState];
+  const isSame = assessment.currentState === assessment.recommendedState;
   return (
     <View style={styles.stateCard}>
-      {/* 顶行：当前状态徽章 + 仓位 % */}
+      {/* 顶行：当前状态（仓位决定）+ 关键指标 */}
       <View style={styles.stateTopRow}>
-        <View style={[styles.stateBadge, { backgroundColor: stateColor + '22', borderColor: stateColor }]}>
-          <Text style={[styles.stateBadgeText, { color: stateColor }]}>
-            {STATE_LABELS[assessment.currentState]}
-          </Text>
+        <View style={styles.stateLabelGroup}>
+          <Text style={styles.stateSmallLabel}>当前</Text>
+          <View style={[styles.stateBadge, { backgroundColor: curColor + '22', borderColor: curColor }]}>
+            <Text style={[styles.stateBadgeText, { color: curColor }]}>
+              {STATE_LABELS[assessment.currentState]}
+            </Text>
+          </View>
         </View>
-        <Text style={styles.stateMetaText}>
-          仓位 {assessment.positionRatioPct.toFixed(1)}%
-          {'  '}回撤 {assessment.currentDrawdownPct.toFixed(1)}%
+        {!isSame && (
+          <>
+            <Text style={styles.stateArrow}>→</Text>
+            <View style={styles.stateLabelGroup}>
+              <Text style={styles.stateSmallLabel}>建议</Text>
+              <View style={[styles.stateBadge, { backgroundColor: recColor + '22', borderColor: recColor }]}>
+                <Text style={[styles.stateBadgeText, { color: recColor }]}>
+                  {STATE_LABELS[assessment.recommendedState]}
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
+        <View style={styles.stateMetaGroup}>
+          <Text style={styles.stateMetaText}>仓位 {assessment.positionRatioPct.toFixed(1)}%</Text>
+          <Text style={styles.stateMetaText}>回撤 {assessment.currentDrawdownPct.toFixed(1)}%</Text>
+          {assessment.upDays > 0 && (
+            <Text style={[styles.stateMetaText, { color: Colors.profit }]}>↑{assessment.upDays}天</Text>
+          )}
+          {assessment.downDays > 0 && (
+            <Text style={[styles.stateMetaText, { color: Colors.loss }]}>↓{assessment.downDays}天</Text>
+          )}
+        </View>
+      </View>
+
+      {/* 操作建议 */}
+      <Text style={styles.stateSuggestion}>{assessment.suggestion}</Text>
+
+      {/* 补充依据 */}
+      {assessment.recommendedReasons.length > 1 && (
+        <Text style={styles.stateBlocker}>
+          {assessment.recommendedReasons.slice(1).join('；')}
         </Text>
-        {assessment.upDays > 0 && (
-          <Text style={[styles.stateMetaText, { color: Colors.profit }]}>
-            ↑{assessment.upDays}天
-          </Text>
-        )}
-        {assessment.downDays > 0 && (
-          <Text style={[styles.stateMetaText, { color: Colors.loss }]}>
-            ↓{assessment.downDays}天
-          </Text>
-        )}
-      </View>
-
-      {/* 建议文字 */}
-      {assessment.suggestion ? (
-        <Text style={styles.stateSuggestion}>{assessment.suggestion}</Text>
-      ) : null}
-
-      {/* 阻碍条件 */}
-      {assessment.blockers.length > 0 && (
-        <Text style={styles.stateBlocker}>⚠ {assessment.blockers.join('；')}</Text>
       )}
-
-      {/* 手动切换状态 */}
-      <View style={styles.statePillRow}>
-        {states.map(s => {
-          const active = assessment.currentState === s;
-          const c = STATE_COLORS[s];
-          return (
-            <TouchableOpacity
-              key={s}
-              style={[styles.statePill, { borderColor: c }, active && { backgroundColor: c }]}
-              onPress={() => !active && onStateChange(s)}>
-              <Text style={[styles.statePillText, { color: active ? '#fff' : c }]}>
-                {STATE_LABELS[s]}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
     </View>
   );
 }
@@ -487,6 +509,22 @@ function makeStyles(C: ThemeColors) {
     periodText: { fontSize: FontSize.sm, color: C.textTertiary },
     periodTextActive: { color: C.primary, fontWeight: FontWeight.semibold },
     content: { padding: Spacing.md },
+    portfolioTabsRow: {
+      flexDirection: 'row',
+      gap: Spacing.xs,
+      paddingBottom: Spacing.sm,
+    },
+    portfolioTab: {
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.xs,
+      borderRadius: Radius.md,
+      backgroundColor: C.surfaceElevated,
+      borderWidth: 1,
+      borderColor: C.border,
+    },
+    portfolioTabActive: { backgroundColor: C.primary, borderColor: C.primary },
+    portfolioTabText: { fontSize: FontSize.sm, color: C.textSecondary },
+    portfolioTabTextActive: { color: '#fff', fontWeight: FontWeight.semibold },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -609,6 +647,16 @@ function makeStyles(C: ThemeColors) {
       marginBottom: Spacing.xs,
       flexWrap: 'wrap',
     },
+    stateLabelGroup: { alignItems: 'center', gap: 2 },
+    stateSmallLabel: { fontSize: FontSize.xs, color: C.textTertiary },
+    stateArrow: { fontSize: FontSize.md, color: C.textTertiary, marginTop: 10 },
+    stateMetaGroup: {
+      flex: 1,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: Spacing.sm,
+      justifyContent: 'flex-end',
+    },
     stateBadge: {
       paddingHorizontal: Spacing.sm,
       paddingVertical: 2,
@@ -629,10 +677,25 @@ function makeStyles(C: ThemeColors) {
       color: C.textTertiary,
       marginBottom: Spacing.xs,
     },
+    stateDivider: {
+      height: 1,
+      backgroundColor: C.border,
+      marginVertical: Spacing.sm,
+    },
+    stateCurrentRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+    },
+    stateCurrentLabel: {
+      fontSize: FontSize.xs,
+      color: C.textTertiary,
+      width: 44,
+    },
     statePillRow: {
+      flex: 1,
       flexDirection: 'row',
       gap: Spacing.sm,
-      marginTop: Spacing.xs,
     },
     statePill: {
       flex: 1,

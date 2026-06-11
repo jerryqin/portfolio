@@ -129,36 +129,96 @@ export function calcConsecutiveNavDays(navSeries: number[]): {
 // ─── 组合状态评估 ──────────────────────────────────────────
 
 export interface StateAssessment {
-  currentState: StateType;
-  suggestedState: StateType | null;   // null = 维持当前状态
-  positionRatioPct: number;           // 当前总仓位 %（0-100）
-  highWatermarkNav: number;           // 历史最高净值
-  currentDrawdownPct: number;         // 当前相对高点回撤 %（正数）
-  upDays: number;                     // 净值连涨天数
-  downDays: number;                   // 净值连跌天数
-  upgradeReady: boolean;              // 是否满足晋级条件
-  downgradeReady: boolean;            // 是否满足降级条件
-  blockers: string[];                 // 晋级阻碍原因
-  reasons: string[];                  // 降级触发原因
-  suggestion: string;                 // 操作建议文案
+  currentState: StateType;        // 当前状态：仅由仓位比例决定
+  recommendedState: StateType;    // 建议状态：综合回撤、连涨等指标
+  recommendedReasons: string[];   // 建议依据
+  suggestion: string;             // 操作建议文案
+  positionRatioPct: number;
+  highWatermarkNav: number;
+  currentDrawdownPct: number;
+  upDays: number;
+  downDays: number;
 }
 
 /**
- * 评估组合状态，输出建议动作。
- * @param snapshotNavs  历史快照净值序列（按时间从早到晚）
- * @param currentNavPerUnit  当前实时计算净值（最新值）
+ * 纯基于量化指标计算「客观建议状态」，完全不受用户已记录的 currentState 影响。
+ * 这样无论用户把按钮切到哪里，这个结果都保持稳定。
+ */
+function computeObjectiveState(params: {
+  positionRatioPct: number;
+  currentDrawdownPct: number;
+  upDays: number;
+  isInProfit: boolean;
+  config: StateConfig;
+}): { state: StateType; reasons: string[] } {
+  const { positionRatioPct, currentDrawdownPct, upDays, isInProfit, config } = params;
+  const reasons: string[] = [];
+
+  // ① 回撤触及最大阈值 → 必须观察态
+  if (currentDrawdownPct >= config.portfolioMaxDrawdownPct) {
+    reasons.push(`回撤 ${currentDrawdownPct.toFixed(1)}% 达到最大阈值 ${config.portfolioMaxDrawdownPct}%，须大幅减仓`);
+    return { state: 'observing', reasons };
+  }
+
+  // ② 回撤超过进攻阈值 → 最多平衡态
+  if (currentDrawdownPct >= config.attackingDrawdownPct) {
+    reasons.push(`回撤 ${currentDrawdownPct.toFixed(1)}% 超过进攻态阈值 ${config.attackingDrawdownPct}%`);
+    if (positionRatioPct > config.balancedMax) {
+      reasons.push(`仓位 ${positionRatioPct.toFixed(1)}% 超出平衡态上限 ${config.balancedMax}%，建议减仓至 ${config.balancedMin}%–${config.balancedMax}%`);
+    }
+    return { state: 'balanced', reasons };
+  }
+
+  // ③ 仓位超出进攻上限（仓位偏重但回撤尚可）→ 平衡态
+  if (positionRatioPct > config.attackingMax) {
+    reasons.push(`仓位 ${positionRatioPct.toFixed(1)}% 超出进攻态上限 ${config.attackingMax}%，建议小幅减仓至 ${config.attackingMin}%–${config.attackingMax}%`);
+    return { state: 'balanced', reasons };
+  }
+
+  // ④ 具备进攻条件：仓位合理 + 回撤小 + 连涨 + 盈利
+  if (
+    positionRatioPct >= config.attackingMin &&
+    upDays >= config.upgradeUpDays &&
+    isInProfit
+  ) {
+    reasons.push(`仓位 ${positionRatioPct.toFixed(1)}% 在进攻区间，净值连涨 ${upDays} 天，组合盈利`);
+    return { state: 'attacking', reasons };
+  }
+
+  // ⑤ 仓位极低 + 亏损 → 观察态
+  if (positionRatioPct <= config.observingMax && !isInProfit) {
+    reasons.push(`组合亏损且仓位 ${positionRatioPct.toFixed(1)}% 偏低，等待方向确认`);
+    return { state: 'observing', reasons };
+  }
+
+  // ⑥ 默认：平衡态
+  reasons.push(`仓位 ${positionRatioPct.toFixed(1)}% 在合理范围，回撤 ${currentDrawdownPct.toFixed(1)}% 可控`);
+  return { state: 'balanced', reasons };
+}
+
+/**
+ * 仅根据仓位比例判断当前所处状态（最直接的客观事实）。
+ */
+function stateFromPosition(positionRatioPct: number, config: StateConfig): StateType {
+  if (positionRatioPct <= config.observingMax) return 'observing';
+  if (positionRatioPct <= config.balancedMax)  return 'balanced';
+  return 'attacking';
+}
+
+/**
+ * 评估组合状态。
+ * - currentState：仅由当前仓位比例决定（最直观的客观事实）
+ * - recommendedState：综合回撤、连涨天数、盈亏等指标给出操作建议
  */
 export function assessPortfolioState(params: {
-  currentState: StateType;
   snapshotNavs: number[];
   currentNavPerUnit: number;
   positionRatioPct: number;
   config: StateConfig;
 }): StateAssessment {
-  const { currentState, snapshotNavs, currentNavPerUnit, positionRatioPct, config } = params;
+  const { snapshotNavs, currentNavPerUnit, positionRatioPct, config } = params;
 
   const isInProfit = currentNavPerUnit > 1.0;
-  // 历史最高净值包含当前实时值
   const allNavs = [...snapshotNavs, currentNavPerUnit];
   const highWatermarkNav = calcHighWatermarkNav(allNavs);
   const currentDrawdownPct =
@@ -166,92 +226,41 @@ export function assessPortfolioState(params: {
       ? ((highWatermarkNav - currentNavPerUnit) / highWatermarkNav) * 100
       : 0;
 
-  // 连涨/连跌天数基于历史快照（不含当日实时值）
   const { upDays, downDays } = calcConsecutiveNavDays(snapshotNavs);
 
-  let suggestedState: StateType | null = null;
-  let upgradeReady = false;
-  let downgradeReady = false;
-  const blockers: string[] = [];
-  const reasons: string[] = [];
-  let suggestion = '';
+  // 当前状态：仅看仓位
+  const currentState = stateFromPosition(positionRatioPct, config);
 
-  if (currentState === 'observing') {
-    const canUpgrade =
-      isInProfit &&
-      upDays >= config.upgradeUpDays &&
-      positionRatioPct < config.balancedMin;
+  // 建议状态：综合所有指标
+  const { state: recommendedState, reasons: recommendedReasons } = computeObjectiveState({
+    positionRatioPct,
+    currentDrawdownPct,
+    upDays,
+    isInProfit,
+    config,
+  });
 
-    if (canUpgrade) {
-      upgradeReady = true;
-      suggestedState = 'balanced';
-      suggestion = `净值已连续 ${upDays} 天上涨，组合盈利，建议逐步加仓至 ${config.balancedMin}%–${config.balancedMax}%，进入平衡态。`;
-    } else {
-      if (!isInProfit) blockers.push('组合尚未盈利');
-      if (upDays < config.upgradeUpDays)
-        blockers.push(`净值连涨仅 ${upDays} 天（需 ${config.upgradeUpDays} 天）`);
-      suggestion = `维持观察态，等待组合方向确认后再逐步建仓。`;
-    }
-  } else if (currentState === 'balanced') {
-    const canUpgrade =
-      upDays >= config.upgradeUpDays &&
-      currentDrawdownPct < config.attackingDrawdownPct;
-
-    const shouldDowngrade =
-      downDays >= config.downgradeDownDays ||
-      currentDrawdownPct > config.portfolioMaxDrawdownPct / 2;
-
-    if (shouldDowngrade) {
-      downgradeReady = true;
-      suggestedState = 'observing';
-      if (downDays >= config.downgradeDownDays)
-        reasons.push(`净值连跌 ${downDays} 天`);
-      if (currentDrawdownPct > config.portfolioMaxDrawdownPct / 2)
-        reasons.push(`回撤 ${currentDrawdownPct.toFixed(2)}% 超过阈值`);
-      suggestion = `建议降级至观察态，将总仓位降至 ${config.observingMax}% 以内。`;
-    } else if (canUpgrade) {
-      upgradeReady = true;
-      suggestedState = 'attacking';
-      suggestion = `净值连涨 ${upDays} 天，回撤 ${currentDrawdownPct.toFixed(2)}% 控制良好，建议加仓至 ${config.attackingMin}%–${config.attackingMax}%，进入进攻态。`;
-    } else {
-      if (upDays < config.upgradeUpDays)
-        blockers.push(`净值连涨仅 ${upDays} 天（需 ${config.upgradeUpDays} 天）`);
-      if (currentDrawdownPct >= config.attackingDrawdownPct)
-        blockers.push(`回撤 ${currentDrawdownPct.toFixed(2)}% 超过进攻阈值`);
-      suggestion = `维持平衡态，关注核心持仓走势。`;
-    }
+  // 建议文案
+  const stateOrder: Record<StateType, number> = { observing: 0, balanced: 1, attacking: 2 };
+  let suggestion: string;
+  if (stateOrder[recommendedState] < stateOrder[currentState]) {
+    suggestion = `建议降至${STATE_LABELS[recommendedState]}：${recommendedReasons[0] ?? ''}。`;
+  } else if (stateOrder[recommendedState] > stateOrder[currentState]) {
+    suggestion = `可升至${STATE_LABELS[recommendedState]}：${recommendedReasons[0] ?? ''}。`;
   } else {
-    // attacking
-    const shouldDowngrade =
-      currentDrawdownPct >= config.attackingDrawdownPct ||
-      downDays >= config.downgradeDownDays;
-
-    if (shouldDowngrade) {
-      downgradeReady = true;
-      suggestedState = 'balanced';
-      if (currentDrawdownPct >= config.attackingDrawdownPct)
-        reasons.push(`净值从高点回撤 ${currentDrawdownPct.toFixed(2)}%（阈值 ${config.attackingDrawdownPct}%）`);
-      if (downDays >= config.downgradeDownDays)
-        reasons.push(`净值连跌 ${downDays} 天`);
-      suggestion = `建议降级至平衡态，将总仓位降至 ${config.balancedMin}%–${config.balancedMax}%。`;
-    } else {
-      suggestion = `维持进攻态，跟踪核心持仓是否持续走强。`;
-    }
+    suggestion = `当前状态与建议匹配：${recommendedReasons[0] ?? '继续保持'}。`;
   }
 
   return {
     currentState,
-    suggestedState,
+    recommendedState,
+    recommendedReasons,
+    suggestion,
     positionRatioPct,
     highWatermarkNav,
     currentDrawdownPct,
     upDays,
     downDays,
-    upgradeReady,
-    downgradeReady,
-    blockers,
-    reasons,
-    suggestion,
   };
 }
 
