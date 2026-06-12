@@ -46,18 +46,18 @@ export const SIGNAL_COLORS: Record<HoldingSignal, string> = {
 // 每种状态对应的建议仓位区间 [min%, max%]
 export const STATE_RANGE: Record<StateType, [number, number]> = {
   observing: [0, 30],
-  balanced: [40, 60],
-  attacking: [60, 80],
+  balanced: [30, 60],
+  attacking: [60, 90],
 };
 
 // ─── 用户可配置参数 ────────────────────────────────────────
 
 export interface StateConfig {
   observingMax: number;          // 观察态仓位上限，默认 30%
-  balancedMin: number;           // 平衡态仓位下限，默认 40%
+  balancedMin: number;           // 平衡态仓位下限，默认 30%
   balancedMax: number;           // 平衡态仓位上限，默认 60%
   attackingMin: number;          // 进攻态仓位下限，默认 60%
-  attackingMax: number;          // 进攻态仓位上限，默认 80%
+  attackingMax: number;          // 进攻态仓位上限，默认 90%
   upgradeUpDays: number;         // 晋级所需净值连涨天数，默认 3
   downgradeDownDays: number;     // 降级所需净值连跌天数，默认 3
   attackingDrawdownPct: number;  // 进攻态最大允许回撤 %，默认 4
@@ -73,10 +73,10 @@ export interface StateConfig {
 export function defaultStateConfig(): StateConfig {
   return {
     observingMax: 30,
-    balancedMin: 40,
+    balancedMin: 30,
     balancedMax: 60,
     attackingMin: 60,
-    attackingMax: 80,
+    attackingMax: 90,
     upgradeUpDays: 3,
     downgradeDownDays: 3,
     attackingDrawdownPct: 4,
